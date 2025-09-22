@@ -1,6 +1,6 @@
 # Fantasy Football Predictor
 
-## This project uses machine learning to predict weekly fantasy football player performance. The primary focus is on building a model that forecasts fantasy points (PPR) for upcoming weeks.
+This project uses machine learning to predict weekly fantasy football player performance. The primary focus is on building a model that forecasts fantasy points (PPR) for upcoming weeks.
 
 ## Features
 
@@ -15,6 +15,8 @@ Future:
 ---
 
 ## Data Sources
+
+INSERT DATA SOURCES HERE
 
 ---
 
