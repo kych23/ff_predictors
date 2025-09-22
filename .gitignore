@@ -16,9 +16,6 @@ ipython_config.py
 env/
 venv/
 
-data/raw/
-data/processed/
-
 .vscode/
 .idea/
 *.swp

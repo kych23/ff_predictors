@@ -27,15 +27,15 @@ SELECT
   receiving_yards,
   receiving_tds,
   /* PPR scoring aligned with your config for offense */
-  (passing_yards / 25.0)
-  + (passing_tds * 4)
-  + (passing_interceptions * -1)
-  + (rushing_yards / 10.0)
-  + (rushing_tds * 6)
-  + ((COALESCE(receiving_fumbles_lost, 0) + COALESCE(sack_fumbles_lost, 0)) * -2)
+  (CAST(passing_yards AS DOUBLE) / 25.0)
+  + (passing_tds * 4.0)
+  + (passing_interceptions * -1.0)
+  + (CAST(rushing_yards AS DOUBLE) / 10.0)
+  + (rushing_tds * 6.0)
+  + ((COALESCE(receiving_fumbles_lost, 0) + COALESCE(sack_fumbles_lost, 0)) * -2.0)
   + (receptions * 1.0)
-  + (receiving_yards / 10.0)
-  + (receiving_tds * 6) AS fantasy_points
+  + (CAST(receiving_yards AS DOUBLE) / 10.0)
+  + (receiving_tds * 6.0) AS fantasy_points
 FROM player_stats;
 
 -- 2) Recent form (rolling last-3 incl. current)
@@ -68,8 +68,10 @@ WITH snaps_base AS (
     s.team,
     s.offense_snaps,
     CAST(s.offense_snaps AS DOUBLE)
-      / NULLIF(SUM(s.offense_snaps) OVER (PARTITION BY s.season, s.week, s.team), 0)
-      AS snap_share
+      / CASE WHEN SUM(s.offense_snaps) OVER (PARTITION BY s.season, s.week, s.team) = 0
+             THEN NULL
+             ELSE CAST(SUM(s.offense_snaps) OVER (PARTITION BY s.season, s.week, s.team) AS DOUBLE)
+        END AS snap_share
   FROM snap_counts s
 )
 SELECT
@@ -89,9 +91,11 @@ SELECT
   receiver_id AS player_id,
   season,
   week,
-  COUNT(*) FILTER (WHERE yardline_100 <= 20) AS rz_targets,
-  COUNT(*) FILTER (WHERE yardline_100 <= 5)  AS gl_targets,
-  AVG(air_yards) FILTER (WHERE air_yards IS NOT NULL) AS avg_air_yards
+  /* COUNT(*) FILTER (...) → SUM(CASE WHEN ...) */
+  SUM(CASE WHEN yardline_100 <= 20 THEN 1 ELSE 0 END) AS rz_targets,
+  SUM(CASE WHEN yardline_100 <= 5  THEN 1 ELSE 0 END) AS gl_targets,
+  /* AVG ignores NULLs; FILTER is unnecessary */
+  AVG(air_yards) AS avg_air_yards
 FROM pbp
 WHERE pass = 1 AND receiver_id IS NOT NULL
 GROUP BY receiver_id, season, week;
@@ -101,8 +105,8 @@ SELECT
   rusher_id AS player_id,
   season,
   week,
-  COUNT(*) FILTER (WHERE yardline_100 <= 20) AS rz_carries,
-  COUNT(*) FILTER (WHERE yardline_100 <= 5)  AS gl_carries
+  SUM(CASE WHEN yardline_100 <= 20 THEN 1 ELSE 0 END) AS rz_carries,
+  SUM(CASE WHEN yardline_100 <= 5  THEN 1 ELSE 0 END) AS gl_carries
 FROM pbp
 WHERE rush = 1 AND rusher_id IS NOT NULL
 GROUP BY rusher_id, season, week;
@@ -120,7 +124,8 @@ SELECT
   week,
   home_team,
   away_team,
-  any_value(roof) AS roof,
+  /* ANY_VALUE → ARBITRARY (DuckDB) */
+  arbitrary(roof) AS roof,
   AVG(temp)       AS avg_temp,
   AVG(wind)       AS avg_wind
 FROM pbp
