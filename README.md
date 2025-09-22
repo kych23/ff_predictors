@@ -4,13 +4,15 @@ This project uses machine learning to predict weekly fantasy football player per
 
 ## Features
 
-- Who Should I Start?
+- Who Should I Start? (1 - 1 player comparison)
 
 Future:
 
 - Will I Win my Matchup?
 - Who Should I Trade?
-- Who Should I Draft?
+- Who Should I Draft? (1 - 1 player comparison)
+- Who Should I Start? (Full starting roster)
+- Who Should I Draft? (Given current roster)
 
 ---
 
@@ -24,6 +26,6 @@ INSERT DATA SOURCES HERE
 
 1. Clone the repository
    ```bash
-   git clone https://github.com/YOUR_USERNAME/ff-predictors.git
+   git clone https://github.com/<YOUR_USERNAME>/ff-predictors.git
    cd ff-predictors
    ```
