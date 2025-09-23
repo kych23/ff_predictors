@@ -6,14 +6,14 @@ CREATE OR REPLACE VIEW schedules    AS SELECT * FROM read_parquet('data/raw/sche
 CREATE OR REPLACE VIEW players      AS SELECT * FROM read_parquet('data/raw/players.parquet');
 CREATE OR REPLACE VIEW injuries     AS SELECT * FROM read_parquet('data/raw/injuries.parquet');
 
--- 1) Fantasy points per player-week (offense; extend for K/DST later)
+-- 1) Fantasy points per player-week (offense)
 CREATE OR REPLACE TABLE player_week AS
 SELECT
   player_id,
   player_name,
   position,
   team,
-  opponent_team         AS opp,
+  opponent_team AS opp,
   season,
   week,
   passing_yards,
@@ -26,7 +26,7 @@ SELECT
   receptions,
   receiving_yards,
   receiving_tds,
-  /* PPR scoring aligned with your config for offense */
+  /* PPR scoring */
   (CAST(passing_yards AS DOUBLE) / 25.0)
   + (passing_tds * 4.0)
   + (passing_interceptions * -1.0)
@@ -58,24 +58,33 @@ SELECT
   ) AS fp_std_3
 FROM player_week;
 
--- 3) Snap share (usage)
+-- 3) Snap share (usage) — map PFR → GSIS using `players`
 CREATE OR REPLACE TABLE snaps_enriched AS
-WITH snaps_base AS (
+WITH team_totals AS (
+  SELECT 
+    season, 
+    week, 
+    team, 
+    SUM(offense_snaps) AS total_team_snaps
+  FROM snap_counts 
+  GROUP BY season, week, team
+),
+snaps_base AS (
   SELECT
     s.pfr_player_id,
     s.season,
     s.week,
     s.team,
     s.offense_snaps,
-    CAST(s.offense_snaps AS DOUBLE)
-      / CASE WHEN SUM(s.offense_snaps) OVER (PARTITION BY s.season, s.week, s.team) = 0
-             THEN NULL
-             ELSE CAST(SUM(s.offense_snaps) OVER (PARTITION BY s.season, s.week, s.team) AS DOUBLE)
-        END AS snap_share
+    CASE WHEN t.total_team_snaps > 0 
+         THEN CAST(s.offense_snaps AS DOUBLE) / CAST(t.total_team_snaps AS DOUBLE)
+         ELSE NULL END AS snap_share
   FROM snap_counts s
+  LEFT JOIN team_totals t 
+    ON s.season = t.season AND s.week = t.week AND s.team = t.team
 )
 SELECT
-  p.player_id,
+  p.gsis_id AS player_id,
   b.season,
   b.week,
   b.team,
@@ -83,18 +92,17 @@ SELECT
   b.snap_share
 FROM snaps_base b
 LEFT JOIN players p
-  ON p.pfr_player_id = b.pfr_player_id;
+  ON p.pfr_id = b.pfr_player_id;
 
--- 4) Red-zone & goal-line features from PBP
+
+-- 4) Red-zone & goal-line features from PBP (no FILTER clause)
 CREATE OR REPLACE TABLE rz_targets AS
 SELECT
   receiver_id AS player_id,
   season,
   week,
-  /* COUNT(*) FILTER (...) → SUM(CASE WHEN ...) */
   SUM(CASE WHEN yardline_100 <= 20 THEN 1 ELSE 0 END) AS rz_targets,
   SUM(CASE WHEN yardline_100 <= 5  THEN 1 ELSE 0 END) AS gl_targets,
-  /* AVG ignores NULLs; FILTER is unnecessary */
   AVG(air_yards) AS avg_air_yards
 FROM pbp
 WHERE pass = 1 AND receiver_id IS NOT NULL
@@ -116,27 +124,23 @@ CREATE OR REPLACE TABLE team_points AS
 SELECT season, week, home_team AS team, home_score AS team_points FROM schedules
 UNION ALL
 SELECT season, week, away_team AS team, away_score AS team_points FROM schedules;
-
--- 6) Weather / stadium (aggregate by game → map to team)
+-- 6) Weather / stadium from schedules → map to team
 CREATE OR REPLACE TABLE game_weather AS
 SELECT
   season,
   week,
   home_team,
   away_team,
-  /* ANY_VALUE → ARBITRARY (DuckDB) */
-  arbitrary(roof) AS roof,
-  AVG(temp)       AS avg_temp,
-  AVG(wind)       AS avg_wind
-FROM pbp
-GROUP BY season, week, home_team, away_team;
+  roof,
+  temp  AS avg_temp,
+  wind  AS avg_wind
+FROM schedules;
 
 CREATE OR REPLACE TABLE team_weather AS
-SELECT season, week, home_team AS team, roof, avg_temp, avg_wind
-FROM game_weather
+SELECT season, week, home_team AS team, roof, avg_temp, avg_wind FROM game_weather
 UNION ALL
-SELECT season, week, away_team AS team, roof, avg_temp, avg_wind
-FROM game_weather;
+SELECT season, week, away_team AS team, roof, avg_temp, avg_wind FROM game_weather;
+
 
 -- 7) Opponent FP allowed vs position (leak-free last-3 prior weeks)
 CREATE OR REPLACE TABLE def_fp_allowed AS

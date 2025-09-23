@@ -67,8 +67,13 @@ Pipeline:
 2. Construct data into organized dataset
 
 - DuckDB and Parquet
+- current team and opposing team features should be converted to integer
 
-3. Pick and train different machine learning models
+3. Model Selection
+
+- supervised learning approach
+- for predicting exact projected fantasy points, use continuous models (regression - linear, lasso, ridge)
+- Random Forest regression, Gradient Boosting regression
 
 4. Validate with current season results
 
@@ -148,3 +153,26 @@ Data Sources:
 
 - nflreadpy
   - https://github.com/nflverse/nfldata/tree/master for schedules and game data
+
+Columns in dataset (_ is excluded from features):
+player_id_\*
+player_name\*
+position --> encoded
+team\*
+opp\*
+season\*
+week\*
+fantasy_points
+fp_avg_3
+fp_std_3
+snap_share
+rz_targets
+gl_targets
+rz_carries
+gl_carries
+def_fp_allowed_last3
+team_points
+roof --> encoded
+avg_temp
+avg_wind
+avg_air_yards
