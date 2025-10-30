@@ -14,6 +14,7 @@ def _add_priors(
     metrics: List[str],
     windows: List[int] = [3, 5],
     ewm_alpha: float = 0.7,
+    priors_req : int = 1,
 ) -> pd.DataFrame:
     """Shift by one week, then rolling means and EWMA (exponentially weighted moving average). Returns df with new prior columns only"""
     if df.empty:
@@ -39,9 +40,13 @@ def _add_priors(
     id_cols = [c for c in ["player_id", "season", "week", "team", "opponent_team", "position"] if c in work.columns]
     prior_cols = [c for c in work.columns if any(s in c for s in ("_avg_", "_ewm"))] + ["gp_prior"]
     out = work[id_cols + prior_cols].copy()
-    
+
     priors_only = out[prior_cols]
     out = out.loc[~priors_only.isna().all(axis=1)].copy()
+    
+    # Require at least priors_req prior games to train on
+    if "gp_prior" in out.columns:
+        out = out.loc[out["gp_prior"] >= priors_req].copy()
     return out
 
 
@@ -50,7 +55,6 @@ def calc_position_priors(years: List[int]) -> Dict[str, pd.DataFrame]:
     base = clean_player_stats(years)
     frames = split_df_by_position(base)
 
-    # QB priors
     qb_metrics = [
         "fantasy_points_ppr",
         "attempts",
@@ -63,7 +67,7 @@ def calc_position_priors(years: List[int]) -> Dict[str, pd.DataFrame]:
     ]
     qb_priors = _add_priors(frames["QB"], ["player_id"], qb_metrics)
 
-    # Skill priors (RB/WR/TE)
+
     skill_metrics = [
         "fantasy_points_ppr",
         "targets",
@@ -78,7 +82,6 @@ def calc_position_priors(years: List[int]) -> Dict[str, pd.DataFrame]:
     ]
     skill_priors = _add_priors(frames["SKILL"], ["player_id"], skill_metrics)
 
-    # Kicker priors
     k_metrics = [
         "fantasy_points_ppr",
         "fg_att",
@@ -95,6 +98,5 @@ if __name__ == "__main__":
     priors = calc_position_priors(YEARS)
     for name, df in priors.items():
         print(name, {"rows": len(df), "cols": df.shape[1]})
-        print(df.head())
 
 

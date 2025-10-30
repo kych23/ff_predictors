@@ -2,9 +2,9 @@ import nflreadpy as nfl
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from db.init_db import init_db
-from db.initial_load import upsert_games, upsert_labels, upsert_players, upsert_teams
-from db.session import SessionLocal
+from src.db.init_db import init_db
+from src.db.upsert_data import upsert_games, upsert_labels, upsert_players, upsert_teams
+from src.db.session import SessionLocal
 
 YEARS: list[int] = list(range(2012, 2025))
 
@@ -24,7 +24,7 @@ def load_data_from_api() -> None:
         upsert_teams(schedules, session)
         upsert_games(schedules, session)
 
-        # Labels from player_stats
+        # # Labels from player_stats
         stats_polars = nfl.load_player_stats(seasons=YEARS)
         player_stats = stats_polars.to_pandas()
         labels_cols = [c for c in ["player_id", "season", "week", "fantasy_points", "fantasy_points_ppr"] if c in player_stats.columns]

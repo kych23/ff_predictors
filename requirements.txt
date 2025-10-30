@@ -4,7 +4,8 @@ pyarrow
 numpy
 scikit-learn
 sqlalchemy>=2.0
-psycopg[binary]>=3.2
 fastapi>=0.111
 uvicorn[standard]>=0.30
 joblib>=1.3
+python-dotenv
+psycopg2

@@ -24,7 +24,15 @@ def upsert_players(df: pd.DataFrame, session: Session) -> int:
             "position": "position",
             "latest_team": "team_current",
         }
-    )[ ["player_id", "name", "position", "team_current"] ].dropna(subset=["player_id"])
+    )[ ["player_id", "name", "position", "team_current"] ]\
+        .copy()
+
+    # Normalize text fields and treat empty strings as missing
+    records["name"] = records["name"].astype(str).str.strip()
+    records["position"] = records["position"].astype(str).str.strip()
+    records.loc[records["name"] == "", "name"] = pd.NA
+    records.loc[records["position"] == "", "position"] = pd.NA
+    records = records.dropna(subset=["player_id", "name", "position"])  # enforce NOT NULLs
 
     total = 0
     for chunk in _chunk_iter(records):
@@ -103,7 +111,13 @@ def upsert_labels(df: pd.DataFrame, session: Session) -> int:
     if missing:
         raise ValueError(f"Missing columns for labels: {missing}")
 
-    records = df[required]
+    records = df[required].copy()
+    records["player_id"] = records["player_id"].astype(str).str.strip()
+    records.loc[records["player_id"] == "", "player_id"] = pd.NA
+    records["season"] = pd.to_numeric(records["season"], errors="coerce").astype("Int64")
+    records["week"] = pd.to_numeric(records["week"], errors="coerce").astype("Int64")
+    records["fantasy_points"] = pd.to_numeric(records["fantasy_points"], errors="coerce")
+    records = records.dropna(subset=["player_id", "season", "week", "fantasy_points"])  
 
     total = 0
     for chunk in _chunk_iter(records):

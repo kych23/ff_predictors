@@ -1,16 +1,13 @@
 __pycache__/
 
-# Jupyter Notebook
+notebooks/
 .ipynb_checkpoints
 
-# IPython
 profile_default/
 ipython_config.py
 
-# pyenv
 .python-version
 
-# Environments
 .env
 .venv
 env/
@@ -23,3 +20,4 @@ venv/
 
 .DS_Store
 Thumbs.db
+

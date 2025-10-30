@@ -66,6 +66,8 @@ Generate the initial file scaffold for this project. Keep in my these features I
 
 - filter the data to only use regular season games, and deletes data with NaN values
 - given exact data of each game, we must generate priors to train the model on
+- we remove entries where there is no prior data (week 1 or the first week a player plays)
+- persist to db (Supabase)
 
 3.  Model Selection
 
@@ -87,7 +89,7 @@ Who Should I Start? (1 - 1 player comparison)
 - [x] Task 1: Figure out what data to use and how to extract it
 - [x] Task 2: Insert data into database
   - [x] Task 2.1: Clean the data by extracting only key information
-  - [ ] Task 2.2: Feature engineer to create our features for each player to train the model on
+  - [x] Task 2.2: Feature engineer to create our features for each player to train the model on
 - [ ] Task 3: Train different machine learning models and test them for accuracy
 - [ ] Task 4: Design a FastAPI backend
 - [ ] Task 5: Design a React frontend

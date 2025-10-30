@@ -1,14 +1,16 @@
 import os
 from typing import Generator
+from dotenv import load_dotenv
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+load_dotenv(dotenv_path=".env")
 
 def _get_database_url() -> str:
-    url = os.getenv("POSTGRES_URL")
+    url = os.getenv("DATABASE_URL")
     if not url:
-        raise ValueError("POSTGRES_URL environment variable is not set")
+        raise ValueError("DATABASE_URL environment variable is not set")
     return url
 
 
