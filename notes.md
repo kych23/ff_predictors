@@ -90,6 +90,7 @@ Who Should I Start? (1 - 1 player comparison)
 - [x] Task 2: Insert data into database
   - [x] Task 2.1: Clean the data by extracting only key information
   - [x] Task 2.2: Feature engineer to create our features for each player to train the model on
+  - [x] Task 2.3: Construct the training table to train the models on
 - [ ] Task 3: Train different machine learning models and test them for accuracy
 - [ ] Task 4: Design a FastAPI backend
 - [ ] Task 5: Design a React frontend
