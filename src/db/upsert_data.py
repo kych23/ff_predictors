@@ -17,6 +17,12 @@ def _chunk_iter(df: pd.DataFrame, size: int = 5_000) -> Iterable[pd.DataFrame]:
 def upsert_players(df: pd.DataFrame, session: Session) -> int:
     if df.empty:
         return 0
+    # Keep only supported offensive positions
+    allowed_positions = {"QB", "RB", "WR", "TE"}
+    df = df.copy()
+    if "position" in df.columns:
+        df["position"] = df["position"].astype(str).str.strip().str.upper()
+        df = df[df["position"].isin(allowed_positions)]
     records = df.rename(
         columns={
             "gsis_id": "player_id",
@@ -112,6 +118,9 @@ def upsert_labels(df: pd.DataFrame, session: Session) -> int:
         raise ValueError(f"Missing columns for labels: {missing}")
 
     records = df[required].copy()
+    # Filter to only players present in players table
+    existing_ids = set(r[0] for r in session.query(Player.player_id).all())
+    records = records[records["player_id"].astype(str).isin(existing_ids)].copy()
     records["player_id"] = records["player_id"].astype(str).str.strip()
     records.loc[records["player_id"] == "", "player_id"] = pd.NA
     records["season"] = pd.to_numeric(records["season"], errors="coerce").astype("Int64")

@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from typing import Dict, Iterable, List
+import warnings
 
 import numpy as np
 import pandas as pd
 
 from .clean_data import clean_player_stats, split_df_by_position
 
+# Silence pandas FutureWarning about groupby.apply on grouping columns
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    message="DataFrameGroupBy.apply operated on the grouping columns",
+)
 
 def _add_priors(
     df: pd.DataFrame,
@@ -35,7 +42,7 @@ def _add_priors(
         g["gp_prior"] = g["week"].notna().astype(int).cumsum().shift(1).fillna(0).astype(int)
         return g
 
-    work = work.groupby(list(group_key), group_keys=False).apply(_per_group, include_groups=False)
+    work = work.groupby(list(group_key), group_keys=False).apply(_per_group, include_groups=True)
 
     id_cols = [c for c in ["player_id", "season", "week", "team", "opponent_team", "position"] if c in work.columns]
     prior_cols = [c for c in work.columns if any(s in c for s in ("_avg_", "_ewm"))] + ["gp_prior"]
@@ -82,12 +89,4 @@ def calc_position_priors(years: List[int]) -> Dict[str, pd.DataFrame]:
     ]
     skill_priors = _add_priors(frames["SKILL"], ["player_id"], skill_metrics)
 
-    k_metrics = [
-        "fantasy_points_ppr",
-        "fg_att",
-        "fg_made_0_19", "fg_made_20_29", "fg_made_30_39", "fg_made_40_49", "fg_made_50_59", "fg_made_60_",
-        "pat_made", "pat_att",
-    ]
-    k_priors = _add_priors(frames["K"], ["player_id"], k_metrics)
-
-    return {"QB": qb_priors, "SKILL": skill_priors, "K": k_priors}
+    return {"QB": qb_priors, "SKILL": skill_priors}

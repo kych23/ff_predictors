@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Dict
+import warnings
 
 import pandas as pd
 from sqlalchemy.dialects.postgresql import insert
@@ -12,6 +13,11 @@ from src.db.session import SessionLocal
 from .clean_data import clean_player_stats
 import nflreadpy as nfl
 
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    message="DataFrameGroupBy.apply operated on the grouping columns",
+)
 
 def _chunk_iter(df: pd.DataFrame, size: int = 5_000):
     for start in range(0, len(df), size):
@@ -83,6 +89,7 @@ def _build_def_pos_allowed_avg5(years: list[int]) -> pd.DataFrame:
     )
     # Rolling mean per defense-position within a season
     def _per_group(g: pd.DataFrame) -> pd.DataFrame:
+        # grouping columns present; safe to sort by season/week
         g = g.sort_values(["season", "week"]).copy()
         # leakage-safe: shift by 1 before rolling
         prior = g["wk_fp_allowed"].shift(1)
@@ -90,7 +97,7 @@ def _build_def_pos_allowed_avg5(years: list[int]) -> pd.DataFrame:
         return g
     allow = (
         wk.groupby(["season", "opponent_team", "position"], group_keys=False)
-        .apply(_per_group)
+        .apply(_per_group, include_groups=True)
     )
     return allow[["season", "week", "opponent_team", "position", "opp_pos_fp_allowed_avg5"]]
 
@@ -115,6 +122,8 @@ def persist_priors_to_features(priors: Dict[str, pd.DataFrame], years: list[int]
             id_cols = [c for c in ["player_id", "season", "week", "opponent_team", "team", "position"] if c in df.columns]
             keep = id_cols + prior_cols
             df2 = df[keep].copy()
+            if "player_id" not in df2.columns:
+                continue
 
             # Join matchup features if available
             if not tw.empty and "team" in df2.columns:

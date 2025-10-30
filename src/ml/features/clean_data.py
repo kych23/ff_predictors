@@ -51,9 +51,6 @@ def clean_player_stats(years: List[int]) -> pd.DataFrame:
         "passing_yards",
         "passing_tds",
         "passing_interceptions",
-        "fg_att",
-        "fg_made_0_19", "fg_made_20_29", "fg_made_30_39", "fg_made_40_49", "fg_made_50_59", "fg_made_60_",
-        "pat_made", "pat_att",
     ]
     df = _coerce_numeric(df, metric_cols)
 
@@ -61,20 +58,15 @@ def clean_player_stats(years: List[int]) -> pd.DataFrame:
     id_cols = [c for c in ["player_id", "season", "week", "team", "opponent_team", "position"] if c in df.columns]
     keep_cols = id_cols + [c for c in metric_cols if c in df.columns]
     df = df[keep_cols].copy()
-    df = df.dropna(subset=keep_cols)
+    required_for_labels = [c for c in ["player_id", "season", "week", "fantasy_points_ppr"] if c in df.columns]
+    if required_for_labels:
+        df = df.dropna(subset=required_for_labels)
 
     return df
 
 
 def split_df_by_position(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
-    """Create position-specific frames (QB, SKILL = RB/WR/TE, K).
-
-    Columns chosen to align with PPR scoring (see notes mapping):
-    - QB: passing (yds/td/int/att/comp) + rushing (yds/td/carries)
-    - SKILL (RB/WR/TE): receiving (targets/receptions/yds/td) + rushing (carries/yds/td)
-    - K: field goals made by distance, attempts, long, PAT
-
-    """
+    """Create position-specific frames (QB, SKILL = RB/WR/TE)."""
 
     def _select_and_drop(d: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
         present = [c for c in cols if c in d.columns]
@@ -96,12 +88,4 @@ def split_df_by_position(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     ]
     skill_df = _select_and_drop(df[skill_mask], skill_feats)
 
-    k_mask = df["position"].isin(["K"])
-    k_feats = key + [
-        "fg_att",
-        "fg_made_0_19", "fg_made_20_29", "fg_made_30_39", "fg_made_40_49", "fg_made_50_59", "fg_made_60_",
-        "pat_made", "pat_att",
-    ]
-    k_df = _select_and_drop(df[k_mask], k_feats)
-
-    return {"QB": qb_df, "SKILL": skill_df, "K": k_df}
+    return {"QB": qb_df, "SKILL": skill_df}

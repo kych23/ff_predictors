@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import json
-import time
-from pathlib import Path
-from typing import Any, Dict, Tuple
-import argparse
+from typing import Tuple
 
 import pandas as pd
 import numpy as np
@@ -13,11 +9,6 @@ from sqlalchemy.orm import Session
 from src.db.init_db import init_db
 from src.db.session import SessionLocal
 from .eval import evaluate_regression
-
-from sklearn.pipeline import Pipeline
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import Ridge
 
 
 def _load_training_data(session: Session) -> pd.DataFrame:
@@ -112,8 +103,6 @@ def build_training_frame(session: Session, priors_req: int = 1, batch: bool = Fa
     return X, y, meta
 
 
-
-
 # ---------- New: flat loader utility ----------
 def load_flat_player_weeks(session: Session, years: list[int] | None = None) -> pd.DataFrame:
     """Load weekly player rows and flatten JSONB into pf_/mf_ columns.
@@ -145,17 +134,20 @@ def load_flat_player_weeks(session: Session, years: list[int] | None = None) -> 
 
 # ---------- Split into position datasets and define feature lists ----------
 def split_by_position(flat: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """Return dict with QB, K, and SKILL (RB/WR/TE) subsets sorted by season, week."""
+    """Return dict with QB and SKILL (RB/WR/TE) subsets sorted by season, week.
+
+    Kickers are intentionally excluded from training.
+    """
     qb = flat[flat["position"].eq("QB")].sort_values(["season", "week"]).reset_index(drop=True)
-    k = flat[flat["position"].eq("K")].sort_values(["season", "week"]).reset_index(drop=True)
     skill = flat[flat["position"].isin(["RB", "WR", "TE"])].sort_values(["season", "week"]).reset_index(drop=True)
-    return {"QB": qb, "K": k, "SKILL": skill}
+    return {"QB": qb, "SKILL": skill}
 
 
 def per_position_feature_lists(flat: pd.DataFrame) -> dict[str, list[str]]:
-    """Build per-position feature lists: all pf_* plus shared mf_* columns.
+    """Build per-position feature lists for QB and SKILL: all pf_* plus shared mf_* columns.
 
     Shared matchup features we expect: team implied, spread, defense allowed last-5, indoor, temp, wind.
+    Kickers are intentionally excluded from training.
     """
     pf_cols = [c for c in flat.columns if c.startswith("pf_")]
     mf_expected = [
@@ -168,7 +160,7 @@ def per_position_feature_lists(flat: pd.DataFrame) -> dict[str, list[str]]:
     ]
     mf_cols = [c for c in mf_expected if c in flat.columns]
     feat = pf_cols + mf_cols
-    return {"QB": feat, "K": feat, "SKILL": feat}
+    return {"QB": feat, "SKILL": feat}
 
 
 # ---------- Expanding time-series CV ----------
@@ -201,14 +193,20 @@ def position_expanding_folds(splits: dict[str, pd.DataFrame], min_years: int = 3
 
 # ---------- XGBoost CV wiring ----------
 def _xgb_default_params() -> dict:
+    """Return tuned XGBoost parameters from RandomizedSearchCV on aggregated data.
+    
+    Best params from notebook: colsample_bytree=0.684, learning_rate=0.022,
+    max_depth=5, n_estimators=562, reg_alpha=0.04, reg_lambda=8.0, subsample=0.822
+    These achieved MAE=4.15 (holdout) / 4.32 (rolling avg) vs 4.37 untuned.
+    """
     return {
-        "n_estimators": 600,
-        "max_depth": 6,
-        "learning_rate": 0.05,
-        "subsample": 0.8,
-        "colsample_bytree": 0.8,
-        "reg_alpha": 0.0,
-        "reg_lambda": 1.0,
+        "n_estimators": 562,
+        "max_depth": 5,
+        "learning_rate": 0.022,
+        "subsample": 0.822,
+        "colsample_bytree": 0.684,
+        "reg_alpha": 0.04,
+        "reg_lambda": 8.0,
         "random_state": 42,
         "n_jobs": -1,
         "tree_method": "hist",
@@ -247,40 +245,5 @@ def train_xgb_per_position(splits: dict[str, pd.DataFrame], feat_lists: dict[str
         pos_folds = folds[pos]
         oof, models = xgb_cv_oof(df, feats, pos_folds, params=params)
         out[pos] = {"oof": oof, "models": models, "features": feats}
-    return out
-
-
-# ---------- Ridge meta model per position ----------
-def train_ridge_meta_per_position(splits: dict[str, pd.DataFrame], mf_candidates: list[str] | None = None, alpha: float = 1.0) -> dict[str, dict]:
-    """Train a Ridge meta-model per position using pred_xgb + selected mf_ features.
-
-    mf_candidates defaults to [team implied, opp allowed avg5, spread].
-    Returns pos -> {"model": pipeline, "features": meta_feature_cols}
-    """
-
-
-    if mf_candidates is None:
-        mf_candidates = [
-            "mf_team_implied_total",
-            "mf_opp_pos_fp_allowed_avg5",
-            "mf_game_spread_team_view",
-        ]
-    out: dict[str, dict] = {}
-    for pos, df in splits.items():
-        if "pred_xgb" not in df.columns:
-            raise ValueError(f"pred_xgb missing in split {pos}. Train XGB first and attach OOF to splits[pos]['pred_xgb'].")
-        meta_feats = ["pred_xgb"] + [c for c in mf_candidates if c in df.columns]
-        Xm = df[meta_feats].copy()
-        # Ensure numeric
-        for c in Xm.columns:
-            Xm[c] = pd.to_numeric(Xm[c], errors="coerce")
-        ym = df["fantasy_points"].astype(float)
-        pipe = Pipeline([
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-            ("ridge", Ridge(alpha=alpha, random_state=42))
-        ])
-        pipe.fit(Xm, ym)
-        out[pos] = {"model": pipe, "features": meta_feats}
     return out
 

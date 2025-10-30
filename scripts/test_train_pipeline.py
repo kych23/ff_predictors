@@ -12,11 +12,10 @@ from src.ml.models.train import (
     per_position_feature_lists,
     position_expanding_folds,
     train_xgb_per_position,
-    train_ridge_meta_per_position,
 )
 
 
-def main(years: List[int] | None, priors_req: int) -> None:
+def main(years: List[int] | None, priors_req: int, k: float) -> None:
     init_db()
     session = SessionLocal()
     try:
@@ -29,36 +28,31 @@ def main(years: List[int] | None, priors_req: int) -> None:
     feats = per_position_feature_lists(flat)
     folds = position_expanding_folds(splits, min_years=3)
 
-    # Train XGB per position and attach OOF predictions
+    # Train XGB per position and evaluate OOF predictions
     xgb_out = train_xgb_per_position(splits, feats, folds)
     for pos, out in xgb_out.items():
-        splits[pos]["pred_xgb"] = out["oof"]
-        print(f"{pos}: XGB OOF MAE (non-NaN) = ", end="")
         oof = out["oof"]
+        print(f"{pos}: XGB OOF MAE (non-NaN) = ", end="")
         oof_mask = ~splits[pos]["fantasy_points"].isna() & ~pd.isna(oof)
         if oof_mask.any():
-            mae = (splits[pos].loc[oof_mask, "fantasy_points"] - oof[oof_mask]).abs().mean()
-            print(round(float(mae), 4))
+            y = splits[pos].loc[oof_mask, "fantasy_points"].astype(float).to_numpy()
+            yhat = oof[oof_mask]
+            import numpy as np  # local import to avoid global dependency when imported as module
+            mae = np.abs(y - yhat).mean()
+            acc = (np.abs(y - yhat) <= k).mean() * 100.0
+            print(f"{round(float(mae), 4)} | Within-{k} Acc = {round(float(acc), 2)}%")
         else:
             print("n/a")
 
-    # Train Ridge meta per position
-    ridge_out = train_ridge_meta_per_position(splits)
-    for pos, ro in ridge_out.items():
-        cols = ro["features"]
-        preds = ro["model"].predict(splits[pos][cols])
-        mae = (splits[pos]["fantasy_points"] - preds).abs().mean()
-        print(f"{pos}: Ridge meta MAE = {round(float(mae), 4)}")
-
-
 if __name__ == "__main__":
     import pandas as pd
+    import numpy as np  # noqa: F401
     parser = argparse.ArgumentParser(description="Test end-to-end training pipeline")
     parser.add_argument("--start", type=int, default=2012, help="Start season (inclusive)")
     parser.add_argument("--end", type=int, default=2025, help="End season (exclusive)")
     parser.add_argument("--priors-req", type=int, default=1, help="Min prior games required")
+    parser.add_argument("--k", type=float, default=3.0, help="Within-k accuracy threshold in points")
     args = parser.parse_args()
     years = list(range(args.start, args.end))
-    main(years, args.priors_req)
-
+    main(years, args.priors_req, args.k)
 
