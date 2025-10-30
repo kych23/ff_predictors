@@ -8,8 +8,6 @@ Stack
 - FastAPI for an HTTP API
 - PostgreSQL for storage
 
-Data source: nflverse via `nflreadpy`
-
 ## Setup
 
 ```bash

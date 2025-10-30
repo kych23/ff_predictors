@@ -62,8 +62,9 @@ Generate the initial file scaffold for this project. Keep in my these features I
 - use nflreadpy API to extract data
 - insert in postgresql database
 
-2. Feature Engineering
+2. Pre-processing
 
+- filter the data to only use regular season games, and deletes data with NaN values
 - given exact data of each game, we must generate priors to train the model on
 
 3.  Model Selection
@@ -103,6 +104,14 @@ roof --> encoded
 avg_temp
 avg_wind
 avg_air_yards
+
+### Features per position:
+
+RB/WR/TE Model:
+
+QB Model:
+
+Kicker:
 
 # TODO
 
