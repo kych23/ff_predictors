@@ -35,7 +35,7 @@ def _add_priors(
         g["gp_prior"] = g["week"].notna().astype(int).cumsum().shift(1).fillna(0).astype(int)
         return g
 
-    work = work.groupby(list(group_key), group_keys=False).apply(_per_group)
+    work = work.groupby(list(group_key), group_keys=False).apply(_per_group, include_groups=False)
 
     id_cols = [c for c in ["player_id", "season", "week", "team", "opponent_team", "position"] if c in work.columns]
     prior_cols = [c for c in work.columns if any(s in c for s in ("_avg_", "_ewm"))] + ["gp_prior"]

@@ -66,6 +66,35 @@ def _build_team_week_features(years: list[int]) -> pd.DataFrame:
     return tw
 
 
+def _build_def_pos_allowed_avg5(years: list[int]) -> pd.DataFrame:
+    """Compute rolling 5-week average fantasy points allowed by a defense to a position.
+
+    Returns columns: season, week, opponent_team (defense), position, opp_pos_fp_allowed_avg5
+    """
+    stats = clean_player_stats(years)
+    # Expect columns: player_id, season, week, team, opponent_team, position, fantasy_points_ppr
+    if "fantasy_points_ppr" not in stats.columns:
+        return pd.DataFrame()
+    wk = (
+        stats
+        .groupby(["season", "week", "opponent_team", "position"], as_index=False)["fantasy_points_ppr"]
+        .mean()
+        .rename(columns={"fantasy_points_ppr": "wk_fp_allowed"})
+    )
+    # Rolling mean per defense-position within a season
+    def _per_group(g: pd.DataFrame) -> pd.DataFrame:
+        g = g.sort_values(["season", "week"]).copy()
+        # leakage-safe: shift by 1 before rolling
+        prior = g["wk_fp_allowed"].shift(1)
+        g["opp_pos_fp_allowed_avg5"] = prior.rolling(5, min_periods=1).mean()
+        return g
+    allow = (
+        wk.groupby(["season", "opponent_team", "position"], group_keys=False)
+        .apply(_per_group)
+    )
+    return allow[["season", "week", "opponent_team", "position", "opp_pos_fp_allowed_avg5"]]
+
+
 def persist_priors_to_features(priors: Dict[str, pd.DataFrame], years: list[int] | None = None) -> int:
     """Upsert priors into the features table as player_features per player-week,
     and attach matchup_features computed from schedules.
@@ -78,11 +107,12 @@ def persist_priors_to_features(priors: Dict[str, pd.DataFrame], years: list[int]
     try:
         years = years or []
         tw = _build_team_week_features(years) if years else pd.DataFrame()
+        allow = _build_def_pos_allowed_avg5(years) if years else pd.DataFrame()
         for df in priors.values():
             if df.empty:
                 continue
             prior_cols = [c for c in df.columns if any(s in c for s in ("_avg_", "_ewm"))] + ["gp_prior"]
-            id_cols = [c for c in ["player_id", "season", "week", "opponent_team", "team"] if c in df.columns]
+            id_cols = [c for c in ["player_id", "season", "week", "opponent_team", "team", "position"] if c in df.columns]
             keep = id_cols + prior_cols
             df2 = df[keep].copy()
 
@@ -93,6 +123,13 @@ def persist_priors_to_features(priors: Dict[str, pd.DataFrame], years: list[int]
                     how="left",
                     on=["season", "week", "team"],
                     suffixes=("", "_m")
+                )
+            # Join opponent allowed by position if available
+            if not allow.empty and {"opponent_team", "position"}.issubset(df2.columns):
+                df2 = df2.merge(
+                    allow,
+                    how="left",
+                    on=["season", "week", "opponent_team", "position"],
                 )
 
             records = []
@@ -106,6 +143,7 @@ def persist_priors_to_features(priors: Dict[str, pd.DataFrame], years: list[int]
                         "temp": (float(r["temp"]) if pd.notna(r.get("temp")) else None),
                         "wind": (float(r["wind"]) if pd.notna(r.get("wind")) else None),
                         "is_indoor": (bool(r["is_indoor"]) if pd.notna(r.get("is_indoor")) else None),
+                        "opp_pos_fp_allowed_avg5": (float(r["opp_pos_fp_allowed_avg5"]) if pd.notna(r.get("opp_pos_fp_allowed_avg5")) else None),
                     }
                 records.append({
                     "player_id": r["player_id"],

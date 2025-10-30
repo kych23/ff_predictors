@@ -90,10 +90,10 @@ Generate the initial file scaffold for this project. Keep in my these features I
 - [x] Task 1: Figure out what data to use and how to extract it
 - [x] Task 2: Insert data into database
   - [x] Task 2.1: Clean the data by extracting only key information
-    - [ ] Task 2.1.1: Add more features (opp DEF vs. position, team_implied_total, game spread)
+    - [x] Task 2.1.1: Add more features (opp DEF vs. position, team_implied_total, game spread, weather)
   - [x] Task 2.2: Feature engineer to create our features for each player to train the model on
   - [x] Task 2.3: Construct the training table to train the models on
-- [ ] Task 3: Train different machine learning models and test them for accuracy
+- [ ] Task 3: Train different machine learning models and test them for accuracy (XGBoost into Ridge Regression)
 - [ ] Task 4: Design a FastAPI backend
 - [ ] Task 5: Design a React frontend
   - [ ] Task 5.1: Add schedule database so user doesn't have to manually enter opponent.
