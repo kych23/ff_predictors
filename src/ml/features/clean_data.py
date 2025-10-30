@@ -51,8 +51,9 @@ def clean_player_stats(years: List[int]) -> pd.DataFrame:
         "passing_yards",
         "passing_tds",
         "passing_interceptions",
+        "fg_att",
         "fg_made_0_19", "fg_made_20_29", "fg_made_30_39", "fg_made_40_49", "fg_made_50_59", "fg_made_60_",
-        "pat_made",
+        "pat_made", "pat_att",
     ]
     df = _coerce_numeric(df, metric_cols)
 
@@ -65,7 +66,7 @@ def clean_player_stats(years: List[int]) -> pd.DataFrame:
     return df
 
 
-def split_position_frames(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+def split_df_by_position(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     """Create position-specific frames (QB, SKILL = RB/WR/TE, K).
 
     Columns chosen to align with PPR scoring (see notes mapping):
@@ -97,8 +98,9 @@ def split_position_frames(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
 
     k_mask = df["position"].isin(["K"])
     k_feats = key + [
+        "fg_att",
         "fg_made_0_19", "fg_made_20_29", "fg_made_30_39", "fg_made_40_49", "fg_made_50_59", "fg_made_60_",
-        "pat_made",
+        "pat_made", "pat_att",
     ]
     k_df = _select_and_drop(df[k_mask], k_feats)
 
@@ -114,7 +116,7 @@ if __name__ == "__main__":
         "columns": cleaned.columns.tolist(),
     })
     print(cleaned.sample(min(5, len(cleaned)), random_state=0))
-    frames = split_position_frames(cleaned)
+    frames = split_df_by_position(cleaned)
     for k, v in frames.items():
         print(k, {"rows": len(v), "cols": v.shape[1]})
 

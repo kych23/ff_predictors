@@ -55,7 +55,7 @@ Generate the initial file scaffold for this project. Keep in my these features I
 - Trade Generator
 ```
 
-**Pipeline:**
+# Pipeline:
 
 1. Find the data
 
@@ -77,47 +77,16 @@ Generate the initial file scaffold for this project. Keep in my these features I
 
 Who Should I Start? (1 - 1 player comparison)
 
-**Data Sources:**
+# Data Sources:
 
 - nflreadpy
   - https://github.com/nflverse/nflreadpy?tab=readme-ov-file for extracting data
-
-Columns in dataset ( is excluded from features):
-player_id\*
-player_name\*
-position --> encoded
-team\*
-opp\*
-season\*
-week\*
-fantasy_points
-fp_avg_3
-fp_std_3
-snap_share
-rz_targets
-gl_targets
-rz_carries
-gl_carries
-def_fp_allowed_last3
-team_points
-roof --> encoded
-avg_temp
-avg_wind
-avg_air_yards
-
-### Features per position:
-
-RB/WR/TE Model:
-
-QB Model:
-
-Kicker:
 
 # TODO
 
 - [x] Task 1: Figure out what data to use and how to extract it
 - [x] Task 2: Insert data into database
-  - [ ] Task 2.1: Clean the data by extracting only key information
+  - [x] Task 2.1: Clean the data by extracting only key information
   - [ ] Task 2.2: Feature engineer to create our features for each player to train the model on
 - [ ] Task 3: Train different machine learning models and test them for accuracy
 - [ ] Task 4: Design a FastAPI backend
