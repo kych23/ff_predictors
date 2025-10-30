@@ -1,19 +1,46 @@
 # Fantasy Football Predictors
 
-A comprehensive machine learning pipeline for predicting NFL player fantasy football performance and making lineup decisions.
+Machine learning project all about PPR fantasy football.
 
----
+Stack
 
-End-to-end, free-data pipeline:
+- Python for ETL/ML
+- FastAPI for an HTTP API
+- PostgreSQL for storage
 
-- Ingest nflverse datasets with `nflreadpy`
-- Store as Parquet
-- Build features with DuckDB SQL
-- Train baseline models (notebook)
+Data source: nflverse via `nflreadpy`
 
 ## Setup
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 ```
+
+Start Postgres (Docker or local service), then initialize tables:
+
+```bash
+python -c "from src.db.init_db import init_db; init_db(); print('DB ready')"
+```
+
+## Load data (from nflreadpy directly)
+
+```bash
+python -m src.ml.load_data
+```
+
+## Train a model
+
+```bash
+python -m src.ml.train
+```
+
+## Run the API
+
+```bash
+uvicorn src.api.main:app --reload
+```
+
+## Attribution
+
+- NFL data via nflverse (`nflreadpy`).

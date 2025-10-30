@@ -103,3 +103,13 @@ roof --> encoded
 avg_temp
 avg_wind
 avg_air_yards
+
+# TODO
+
+- [x] Task 1: Figure out what data to use and how to extract it
+- [x] Task 2: Insert data into database
+  - [ ] Task 2.1: Clean the data by extracting only key information
+  - [ ] Task 2.2: Feature engineer to create our features for each player to train the model on
+- [ ] Task 3: Train different machine learning models and test them for accuracy
+- [ ] Task 4: Design a FastAPI backend
+- [ ] Task 5: Design a React frontend
