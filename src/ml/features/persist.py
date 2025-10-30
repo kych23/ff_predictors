@@ -10,6 +10,7 @@ from src.db.init_db import init_db
 from src.db.models import Feature, Label
 from src.db.session import SessionLocal
 from .clean_data import clean_player_stats
+import nflreadpy as nfl
 
 
 def _chunk_iter(df: pd.DataFrame, size: int = 5_000):
@@ -17,8 +18,57 @@ def _chunk_iter(df: pd.DataFrame, size: int = 5_000):
         yield df.iloc[start : start + size]
 
 
-def persist_priors_to_features(priors: Dict[str, pd.DataFrame]) -> int:
-    """Upsert priors into the features table as feature_json per player-week.
+def _build_team_week_features(years: list[int]) -> pd.DataFrame:
+    """Create per-team/week matchup features from schedules.
+
+    Output columns: season, week, team, opponent_team, is_home,
+    team_implied_total, game_spread_team_view, temp, wind, is_indoor
+    """
+    sch = nfl.load_schedules(seasons=years)
+    sch = sch.to_pandas() if hasattr(sch, "to_pandas") else sch
+    use = sch[[
+        "season", "week", "home_team", "away_team",
+        "total_line", "total", "spread_line", "roof", "temp", "wind",
+    ]].copy()
+    use["total_for_calc"] = use["total_line"].fillna(use["total"])  # prefer total_line
+    # Implied totals from home spread convention
+    use["home_itt"] = use["total_for_calc"] / 2 - use["spread_line"] / 2
+    use["away_itt"] = use["total_for_calc"] / 2 + use["spread_line"] / 2
+    # is_indoor from roof
+    use["is_indoor"] = use["roof"].astype(str).str.lower().isin(["dome", "closed"]) 
+
+    # Build home rows
+    home = use.rename(columns={
+        "home_team": "team",
+        "away_team": "opponent_team",
+    })[
+        ["season", "week", "team", "opponent_team", "spread_line", "home_itt", "temp", "wind", "is_indoor"]
+    ].copy()
+    home["is_home"] = True
+    home["team_implied_total"] = home["home_itt"]
+    home["game_spread_team_view"] = home["spread_line"]
+
+    # Build away rows
+    away = use.rename(columns={
+        "away_team": "team",
+        "home_team": "opponent_team",
+    })[
+        ["season", "week", "team", "opponent_team", "spread_line", "away_itt", "temp", "wind", "is_indoor"]
+    ].copy()
+    away["is_home"] = False
+    away["team_implied_total"] = away["away_itt"]
+    away["game_spread_team_view"] = -away["spread_line"]
+
+    tw = pd.concat([
+        home[["season","week","team","opponent_team","is_home","team_implied_total","game_spread_team_view","temp","wind","is_indoor"]],
+        away[["season","week","team","opponent_team","is_home","team_implied_total","game_spread_team_view","temp","wind","is_indoor"]],
+    ], ignore_index=True)
+    return tw
+
+
+def persist_priors_to_features(priors: Dict[str, pd.DataFrame], years: list[int] | None = None) -> int:
+    """Upsert priors into the features table as player_features per player-week,
+    and attach matchup_features computed from schedules.
 
     Returns number of rows attempted.
     """
@@ -26,23 +76,45 @@ def persist_priors_to_features(priors: Dict[str, pd.DataFrame]) -> int:
     session: Session = SessionLocal()
     total = 0
     try:
+        years = years or []
+        tw = _build_team_week_features(years) if years else pd.DataFrame()
         for df in priors.values():
             if df.empty:
                 continue
             prior_cols = [c for c in df.columns if any(s in c for s in ("_avg_", "_ewm"))] + ["gp_prior"]
-            id_cols = [c for c in ["player_id", "season", "week", "opponent_team"] if c in df.columns]
+            id_cols = [c for c in ["player_id", "season", "week", "opponent_team", "team"] if c in df.columns]
             keep = id_cols + prior_cols
             df2 = df[keep].copy()
 
+            # Join matchup features if available
+            if not tw.empty and "team" in df2.columns:
+                df2 = df2.merge(
+                    tw,
+                    how="left",
+                    on=["season", "week", "team"],
+                    suffixes=("", "_m")
+                )
+
             records = []
             for _, r in df2.iterrows():
-                feature_json = {k: float(r[k]) for k in prior_cols if pd.notna(r[k])}
+                player_features = {k: float(r[k]) for k in prior_cols if pd.notna(r[k])}
+                matchup_features = None
+                if "team_implied_total" in df2.columns:
+                    matchup_features = {
+                        "team_implied_total": (float(r["team_implied_total"]) if pd.notna(r.get("team_implied_total")) else None),
+                        "game_spread_team_view": (float(r["game_spread_team_view"]) if pd.notna(r.get("game_spread_team_view")) else None),
+                        "temp": (float(r["temp"]) if pd.notna(r.get("temp")) else None),
+                        "wind": (float(r["wind"]) if pd.notna(r.get("wind")) else None),
+                        "is_indoor": (bool(r["is_indoor"]) if pd.notna(r.get("is_indoor")) else None),
+                    }
                 records.append({
                     "player_id": r["player_id"],
                     "season": int(r["season"]),
                     "week": int(r["week"]),
                     "opponent_team": r.get("opponent_team", ""),
-                    "feature_json": feature_json,
+                    "team": r.get("team"),
+                    "player_features": player_features,
+                    "matchup_features": matchup_features,
                 })
 
             for chunk in _chunk_iter(pd.DataFrame(records)):
@@ -53,7 +125,9 @@ def persist_priors_to_features(priors: Dict[str, pd.DataFrame]) -> int:
                     constraint="features_pkey",
                     set_={
                         "opponent_team": stmt.excluded.opponent_team,
-                        "feature_json": stmt.excluded.feature_json,
+                        "team": stmt.excluded.team,
+                        "player_features": stmt.excluded.player_features,
+                        "matchup_features": stmt.excluded.matchup_features,
                     },
                 )
                 session.execute(stmt)
@@ -97,16 +171,3 @@ def persist_labels_from_clean(years: list[int]) -> int:
         raise
     finally:
         session.close()
-
-
-if __name__ == "__main__":
-    from .calc_features import calc_position_priors
-
-    YEARS = list(range(2012, 2025))
-    priors = calc_position_priors(YEARS)
-    wrote = persist_priors_to_features(priors)
-    print({"features_upserted": wrote})
-    labels_written = persist_labels_from_clean(YEARS)
-    print({"labels_upserted": labels_written})
-
-

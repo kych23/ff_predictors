@@ -91,12 +91,3 @@ def calc_position_priors(years: List[int]) -> Dict[str, pd.DataFrame]:
     k_priors = _add_priors(frames["K"], ["player_id"], k_metrics)
 
     return {"QB": qb_priors, "SKILL": skill_priors, "K": k_priors}
-
-
-if __name__ == "__main__":
-    YEARS = list(range(2012, 2025))
-    priors = calc_position_priors(YEARS)
-    for name, df in priors.items():
-        print(name, {"rows": len(df), "cols": df.shape[1]})
-
-

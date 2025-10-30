@@ -105,20 +105,3 @@ def split_df_by_position(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     k_df = _select_and_drop(df[k_mask], k_feats)
 
     return {"QB": qb_df, "SKILL": skill_df, "K": k_df}
-
-
-if __name__ == "__main__":
-    YEARS = list(range(2012, 2025))
-    cleaned = clean_player_stats(YEARS)
-    print({
-        "rows": len(cleaned),
-        "cols": cleaned.shape[1],
-        "columns": cleaned.columns.tolist(),
-    })
-    print(cleaned.sample(min(5, len(cleaned)), random_state=0))
-    frames = split_df_by_position(cleaned)
-    for k, v in frames.items():
-        print(k, {"rows": len(v), "cols": v.shape[1]})
-
-
-

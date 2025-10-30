@@ -6,7 +6,9 @@ from src.db.init_db import init_db
 from src.db.upsert_data import upsert_games, upsert_labels, upsert_players, upsert_teams
 from src.db.session import SessionLocal
 
-YEARS: list[int] = list(range(2012, 2025))
+import datetime
+
+YEARS: list[int] = list(range(2012, datetime.datetime.now().year + 1))
 
 def load_data_from_api() -> None:
     """Load data from nflreadpy API and upsert directly into Postgres."""

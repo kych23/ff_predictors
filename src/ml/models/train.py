@@ -18,8 +18,9 @@ from .eval import evaluate_regression
 
 def _load_training_data(session: Session) -> pd.DataFrame:
     sql = """
-        SELECT f.player_id, f.season, f.week, f.opponent_team,
-               f.feature_json, l.fantasy_points, p.position
+        SELECT f.player_id, f.season, f.week, f.team, f.opponent_team,
+               f.player_features, f.matchup_features,
+               l.fantasy_points, p.position
         FROM features f
         JOIN labels l
           ON l.player_id = f.player_id
@@ -32,31 +33,78 @@ def _load_training_data(session: Session) -> pd.DataFrame:
     return df
 
 
+def _batch_load_training_data(session: Session, years=None) -> pd.DataFrame:
+    """
+    Pulls features x labels (plus position) one year at a time and concatenates.
+    Returns single DataFrame as in _load_training_data, for use when
+    direct join/load_training_data would timeout.
+    years: list of years; if None, infers years from the db.
+    """
+    if years is None:
+        # Find unique available years (seasons) in features table
+        q = "SELECT DISTINCT season FROM features ORDER BY season"
+        candidates = pd.read_sql(q, session.bind)
+        years = list(candidates["season"].astype(int))
+    dfs = []
+    for year in years:
+        sql = f"""
+            SELECT f.player_id, f.season, f.week, f.team, f.opponent_team,
+                   f.player_features, f.matchup_features,
+                   l.fantasy_points, p.position
+            FROM features f
+            JOIN labels l
+              ON l.player_id = f.player_id
+             AND l.season = f.season
+             AND l.week = f.week
+            LEFT JOIN players p
+              ON p.player_id = f.player_id
+            WHERE f.season = {year}
+        """
+        df = pd.read_sql(sql, session.bind)
+        print(f"Loaded season {year} rows: {len(df)}")
+        dfs.append(df)
+    return pd.concat(dfs, ignore_index=True)
+
+
 def _expand_features(df: pd.DataFrame, priors_req: int = 1) -> Tuple[pd.DataFrame, pd.Series, np.ndarray]:
-    feats = pd.json_normalize(df["feature_json"]).astype(float)
+    # Player priors
+    feats = pd.json_normalize(df["player_features"]).astype(float)
     prior_cols = [c for c in feats.columns if ("_avg_" in c or c.endswith("_ewm"))]
     if "gp_prior" in feats.columns:
         prior_cols.append("gp_prior")
     features_df = feats[prior_cols].copy()
+    # Matchup features: bring through as is (may contain NaNs)
+    if "matchup_features" in df.columns:
+        m = pd.json_normalize(df["matchup_features"]).add_prefix("m_")
+        # Select expected keys if present
+        keep_m = [c for c in m.columns if c in {
+            "m_team_implied_total", "m_game_spread_team_view", "m_temp", "m_wind", "m_is_indoor"
+        }]
+        if keep_m:
+            features_df = pd.concat([features_df, m[keep_m]], axis=1)
     target = df["fantasy_points"].astype(float)
     mask = np.ones(len(features_df), dtype=bool)
     if "gp_prior" in features_df.columns:
         mask = features_df["gp_prior"].fillna(0).to_numpy() >= priors_req
-    features_df = features_df.fillna(0.0)
+    # Do not force-fill matchup NaNs here; leave to Pipeline/trees
     return features_df, target, mask
 
 
-def build_training_frame(session: Session, priors_req: int = 1):
+def build_training_frame(session: Session, priors_req: int = 1, batch: bool = False):
     """
     Returns X, y, meta after joining DB, expanding priors, filtering by priors_req.
     X: features, y: target, meta: player_id, season, week, opponent_team, position
+    batch: if True, use batch loading to avoid SQL timeouts (slower, but robust for big joins)
     """
-    df = _load_training_data(session)
+    if batch:
+        df = _batch_load_training_data(session)
+    else:
+        df = _load_training_data(session)
     X, y, mask = _expand_features(df, priors_req=priors_req)
     df = df.loc[mask].reset_index(drop=True)
     X = X.loc[mask].reset_index(drop=True)
     y = y.loc[mask].reset_index(drop=True)
-    meta = df[["player_id", "season", "week", "opponent_team", "position"]].copy()
+    meta = df[["player_id", "season", "week", "team", "opponent_team", "position"]].copy()
     return X, y, meta
 
 
@@ -78,17 +126,4 @@ def run_experiment(model_name: str, model_kwargs: dict, val_season: int | None =
     }
     session.close()
     return out
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, required=True, help="Model name (rf, linreg, ridge, etc.)")
-    parser.add_argument("--model-kwargs", type=str, default="{}", help="JSON or dict string of model kwargs")
-    parser.add_argument("--val-season", type=int, default=None, help="Season for validation split")
-    parser.add_argument("--priors-req", type=int, default=1, help="Minimum required prior games")
-    args = parser.parse_args()
-    kwargs = json.loads(args.model_kwargs.replace("'", '"')) if args.model_kwargs else {}
-    result = run_experiment(args.model, kwargs, val_season=args.val_season, priors_req=args.priors_req)
-    print(json.dumps(result, indent=2))
-
 

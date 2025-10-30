@@ -71,13 +71,14 @@ Generate the initial file scaffold for this project. Keep in my these features I
 
 3.  Model Selection
 
-- supervised learning approach
-- for predicting exact projected fantasy points, use continuous models (regression - linear, lasso, ridge)
-- Random Forest regression, Gradient Boosting regression
+- used jupyter notebook
+- started off using seasons 0 to n-1 as training and season n as validation
+  - switched to using a rolling validation where we take each year as a validation year and all previous years as training to train model
+- focused on regression models
+- finding the perfect hyperparameters
+  - RandomizedSearchCV
 
 4. Validate with current season results
-
-Who Should I Start? (1 - 1 player comparison)
 
 # Data Sources:
 
@@ -89,8 +90,10 @@ Who Should I Start? (1 - 1 player comparison)
 - [x] Task 1: Figure out what data to use and how to extract it
 - [x] Task 2: Insert data into database
   - [x] Task 2.1: Clean the data by extracting only key information
+    - [ ] Task 2.1.1: Add more features (opp DEF vs. position, team_implied_total, game spread)
   - [x] Task 2.2: Feature engineer to create our features for each player to train the model on
   - [x] Task 2.3: Construct the training table to train the models on
 - [ ] Task 3: Train different machine learning models and test them for accuracy
 - [ ] Task 4: Design a FastAPI backend
 - [ ] Task 5: Design a React frontend
+  - [ ] Task 5.1: Add schedule database so user doesn't have to manually enter opponent.

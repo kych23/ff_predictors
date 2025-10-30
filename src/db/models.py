@@ -56,7 +56,9 @@ class Feature(Base):
     season = Column(Integer, primary_key=True)
     week = Column(Integer, primary_key=True)
     opponent_team = Column(String, nullable=False, index=True)
-    feature_json = Column(JSONB, nullable=False)
+    player_features = Column(JSONB, nullable=False)
+    matchup_features = Column(JSONB, nullable=True)
+    team = Column(String, nullable=True, index=True)
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
