@@ -2,6 +2,7 @@ nflreadpy
 pandas
 pyarrow
 numpy
+scipy
 scikit-learn
 sqlalchemy>=2.0
 fastapi>=0.111

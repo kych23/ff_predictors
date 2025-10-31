@@ -5,9 +5,13 @@ from typing import Tuple
 import pandas as pd
 import numpy as np
 from sqlalchemy.orm import Session
+from scipy.stats import loguniform, randint, uniform
+from sklearn.model_selection import RandomizedSearchCV
 
 from src.db.init_db import init_db
 from src.db.session import SessionLocal
+from src.db.models import Prediction
+from sqlalchemy.dialects.postgresql import insert
 from .eval import evaluate_regression
 
 
@@ -213,6 +217,91 @@ def _xgb_default_params() -> dict:
     }
 
 
+def tune_xgb_hyperparameters(
+    df: pd.DataFrame, 
+    feature_cols: list[str],
+    position: str | None = None,
+    n_iter: int = 40,
+    cv: int = 5,
+    random_state: int = 42
+) -> dict:
+    """Tune XGBoost hyperparameters using RandomizedSearchCV.
+    
+    Returns dict of best parameters found.
+    """
+    from xgboost import XGBRegressor
+    
+    X = df[feature_cols].copy()
+    # Ensure numeric dtypes for XGB
+    for c in X.columns:
+        if X[c].dtype == "boolean" or str(X[c].dtype).startswith("Int"):
+            X[c] = X[c].astype("float")
+    y = df["fantasy_points"].astype(float).to_numpy()
+    
+    # Define parameter distributions (position-specific if provided)
+    if position == "QB":
+        # QB needs different tuning: more regularization, lower learning rate
+        param_dist = {
+            "n_estimators": randint(400, 1200),
+            "max_depth": randint(4, 10),
+            "learning_rate": loguniform(5e-3, 2e-1),
+            "subsample": uniform(0.7, 0.3),  # 0.7-1.0
+            "colsample_bytree": uniform(0.7, 0.3),  # 0.7-1.0
+            "reg_alpha": loguniform(1e-6, 1e1),  # L1
+            "reg_lambda": loguniform(1e-3, 1e1),  # L2
+        }
+    elif position == "SKILL":
+        # SKILL: keep broader ranges but slightly adjusted
+        param_dist = {
+            "n_estimators": randint(300, 1200),
+            "max_depth": randint(3, 12),
+            "learning_rate": loguniform(1e-3, 3e-1),
+            "subsample": uniform(0.6, 0.4),  # 0.6-1.0
+            "colsample_bytree": uniform(0.6, 0.4),  # 0.6-1.0
+            "reg_alpha": loguniform(1e-8, 1e2),  # L1
+            "reg_lambda": loguniform(1e-4, 1e2),  # L2
+        }
+    else:
+        # Default shared parameters
+        param_dist = {
+            "n_estimators": randint(300, 1200),
+            "max_depth": randint(3, 12),
+            "learning_rate": loguniform(1e-3, 3e-1),
+            "subsample": uniform(0.6, 0.4),  # 0.6-1.0
+            "colsample_bytree": uniform(0.6, 0.4),  # 0.6-1.0
+            "reg_alpha": loguniform(1e-8, 1e2),  # L1
+            "reg_lambda": loguniform(1e-4, 1e2),  # L2
+        }
+    
+    # Base params that aren't tuned
+    # Set n_jobs=1 for XGBoost to avoid nested parallelism issues with RandomizedSearchCV
+    base_params = {
+        "random_state": random_state,
+        "n_jobs": 1,  # Single-threaded XGBoost to work with RandomSearchCV parallelism
+        "tree_method": "hist",
+    }
+    
+    # Create XGBoost factory
+    def xgb_factory(**kw):
+        params = base_params.copy()
+        params.update(kw)
+        return XGBRegressor(**params)
+    
+    # Run RandomizedSearchCV with reduced parallelism to avoid worker timeout issues
+    search = RandomizedSearchCV(
+        xgb_factory(),
+        param_dist,
+        n_iter=n_iter,
+        scoring="neg_mean_absolute_error",
+        cv=cv,
+        random_state=random_state,
+        n_jobs=2  # Reduced from -1 to avoid worker timeout warnings
+    )
+    search.fit(X, y)
+    
+    return search.best_params_
+
+
 def xgb_cv_oof(df: pd.DataFrame, feature_cols: list[str], folds: list[tuple[np.ndarray, np.ndarray]], params: dict | None = None) -> tuple[np.ndarray, list]:
     """Train XGBRegressor across expanding folds and return OOF predictions and list of models."""
     from xgboost import XGBRegressor
@@ -246,4 +335,110 @@ def train_xgb_per_position(splits: dict[str, pd.DataFrame], feat_lists: dict[str
         oof, models = xgb_cv_oof(df, feats, pos_folds, params=params)
         out[pos] = {"oof": oof, "models": models, "features": feats}
     return out
+
+
+def train_xgb_per_position_with_tuning(
+    splits: dict[str, pd.DataFrame],
+    feat_lists: dict[str, list[str]],
+    folds: dict[str, list[tuple[np.ndarray, np.ndarray]]],
+    tune: bool = True,
+    n_iter: int = 40,
+    cv: int = 5,
+    random_state: int = 42
+) -> dict[str, dict]:
+    """Train XGB per position with optional per-position hyperparameter tuning.
+    
+    If tune=True, uses RandomizedSearchCV to find best params for each position.
+    Returns dict: pos -> {"oof": oof_array, "models": [models], "features": feature_cols, "best_params": params}
+    """
+    out: dict[str, dict] = {}
+    for pos, df in splits.items():
+        feats = feat_lists[pos]
+        pos_folds = folds[pos]
+        
+        # Tune hyperparameters for this position
+        if tune:
+            print(f"Tuning hyperparameters for {pos}...")
+            best_params = tune_xgb_hyperparameters(df, feats, position=pos, n_iter=n_iter, cv=cv, random_state=random_state)
+            print(f"  Best params for {pos}: {best_params}")
+        else:
+            best_params = None
+        
+        oof, models = xgb_cv_oof(df, feats, pos_folds, params=best_params)
+        out[pos] = {"oof": oof, "models": models, "features": feats, "best_params": best_params}
+    
+    return out
+
+
+def save_predictions_to_db(
+    splits: dict[str, pd.DataFrame],
+    xgb_out: dict[str, dict],
+    model_version: str = "xgb_v1",
+    session: Session | None = None
+) -> int:
+    """Save OOF predictions to the predictions table.
+    
+    Args:
+        splits: Position dataframes containing player_id, season, week, opponent_team
+        xgb_out: Output from train_xgb_per_position or train_xgb_per_position_with_tuning
+        model_version: Version string for this model
+        session: Optional database session (creates one if not provided)
+    
+    Returns:
+        Number of predictions saved
+    """
+    close_session = False
+    if session is None:
+        session = SessionLocal()
+        close_session = True
+    
+    total_saved = 0
+    try:
+        for pos, df in splits.items():
+            if pos not in xgb_out:
+                continue
+            
+            oof = xgb_out[pos]["oof"]
+            
+            # Create prediction records
+            records = []
+            for idx, row in df.iterrows():
+                if pd.isna(oof[idx]):
+                    continue
+                
+                records.append({
+                    "player_id": str(row["player_id"]),
+                    "season": int(row["season"]),
+                    "week": int(row["week"]),
+                    "opponent_team": str(row.get("opponent_team", "")),
+                    "model_version": f"{model_version}_{pos}",
+                    "y_pred": float(oof[idx]),
+                    "y_std": None,  # Could compute from ensemble in future
+                })
+            
+            if not records:
+                continue
+            
+            # Batch insert with upsert
+            for chunk in [records[i:i+5000] for i in range(0, len(records), 5000)]:
+                stmt = insert(Prediction).values(chunk)
+                stmt = stmt.on_conflict_do_update(
+                    constraint="uq_prediction_by_model",
+                    set_={
+                        "y_pred": stmt.excluded.y_pred,
+                        "y_std": stmt.excluded.y_std,
+                    }
+                )
+                session.execute(stmt)
+                total_saved += len(chunk)
+        
+        session.commit()
+        return total_saved
+    
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        if close_session:
+            session.close()
 
