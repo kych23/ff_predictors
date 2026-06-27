@@ -1,3 +1,4 @@
+# Core data + modeling (DrafterSpec.md §4.10)
 nflreadpy
 pandas
 pyarrow
@@ -5,11 +6,22 @@ numpy
 scipy
 scikit-learn
 sqlalchemy>=2.0
-fastapi>=0.111
-uvicorn[standard]>=0.30
-joblib>=1.3
-python-dotenv
 psycopg2
-matplotlib
-xgboost
+python-dotenv
+
+# Config + gradient-boosted quantile model
+pyyaml
 lightgbm
+
+# Resilient third-party HTTP (CFBD + FFC) via src/ingest/http.py
+httpx
+
+# NOTE: CFBD college data is pulled via its REST API through ingest/http.py, NOT the
+# `cfbd` Python client — that client pins pydantic v1, which conflicts with
+# nflreadpy's pydantic v2 requirement. New .env key: CFBD_API_KEY (CFBD is not
+# anonymous), alongside DATABASE_URL.
+
+# API/frontend retired for v1 (§4.9); kept optional — they return with the frontend.
+# fastapi>=0.111
+# uvicorn[standard]>=0.30
+# xgboost was the retired weekly model; LightGBM quantile GBM replaces it.

@@ -1,0 +1,46 @@
+# Load-bearing league configuration (DrafterSpec.md §4.2.1).
+# This file defines: (1) how raw stats become fantasy points (scoring),
+# (2) roster slots + flex eligibility that drive replacement/VONA scarcity,
+# (3) benchmark ADP eligibility thresholds, (4) training params.
+# Changing this file re-tunes the whole system to a different league.
+# Its version hash is embedded in model_version on every projection.
+
+league:
+  teams: 12
+  type: snake
+  kind: redraft
+
+roster:
+  slots: { QB: 1, RB: 2, WR: 2, TE: 1, FLEX: 1, K: 1, DEF: 1, BENCH: 6 }
+  flex_eligible: [RB, WR, TE] # positions the FLEX slot can take
+  modeled_positions: [QB, RB, WR, TE] # K/DEF are draft slots but filled at replacement, never modeled
+  max_per_position: { TE: 2, QB: 2 } # recommender-only: cap roster spend per position (1 starter + 1 bench), then heavily discourage more
+
+scoring:
+  pass_yd: 0.04 # 25 yards = 1 point
+  pass_td: 4
+  int: -1
+  rush_yd: 0.1 # 10 yards = 1 point
+  rush_td: 6
+  rec: 1
+  rec_yd: 0.1 # 10 yards = 1 point
+  rec_td: 6
+  return_td: 6
+  two_pt: 2
+  fumble_lost: -2
+
+adp:
+  format: ppr
+  teams: 12
+  adp_min_ranking: 100 # RANKING_ELIGIBLE threshold; adp_min_fullsim derives = teams * roster_rounds = 180
+
+training:
+  min_games_train: 8 # label-quality floor (NOT replacement level)
+  ewm_halflife_seasons: 1.0 # cross-season EWMA decay; tuned on CV folds
+  min_train_seasons: 5 # expanding-fold warmup before OOF emitted
+  min_bucket_n: 30 # calibration bucket fallback floor
+
+backtest:
+  start_season: 2012
+  end_season: 2025
+  as_of_offset_days: 1 # as_of(Y) = day before season Y Week 1 kickoff

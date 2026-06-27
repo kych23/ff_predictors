@@ -1,6 +1,6 @@
 ```
 I am creating a machine learning project that uses machine learning models to predict specific tasks for fantasy football. My current goal is to predict which NFL player to start in my lineup
-between two players and calculate the projected points based on past data. I want to also calculate the 95% confidence interval. I need to scrape data online, formalize datasets, train models, create a decision function, and display results. The point calculation will be as follows:
+between two players and calculate the projected points based on past data. I need to scrape data online, formalize datasets, train models, create a decision function, and display results. The point calculation will be as follows:
 
 {
   "offense": {
@@ -47,53 +47,11 @@ between two players and calculate the projected points based on past data. I wan
 }
 
 Generate the initial file scaffold for this project. Keep in my these features I plan on adding in the future:
-- Will I Win my Matchup?
-- Who Should I Trade?
+- Who should I start? (1 to 1 comparison)
+- Will I Win my Matchup? (given startings rosters of both teams)
+- Who Should I Trade? (1 to 1 comparison)
 - Who Should I Draft? (1 - 1 player comparison)
-- Who Should I Start? (Full starting roster)
-- Who Should I Draft? (Given current roster)
-- Trade Generator
+- Who Should I Start? (Gives you the full roster you should start given all of your players)
+- Who Should I Draft? (Given your current drafted roster, and who's top N players available)
+- Trade Generator (finds best teams and trade targets given your current needs and opposing team's needs)
 ```
-
-# Pipeline:
-
-1. Find the data
-
-- use nflreadpy API to extract data
-- insert in postgresql database
-
-2. Pre-processing
-
-- filter the data to only use regular season games, and deletes data with NaN values
-- given exact data of each game, we must generate priors to train the model on
-- we remove entries where there is no prior data (week 1 or the first week a player plays)
-- persist to db (Supabase)
-
-3.  Model Selection
-
-- used jupyter notebook
-- started off using seasons 0 to n-1 as training and season n as validation
-  - switched to using a rolling validation where we take each year as a validation year and all previous years as training to train model
-- focused on regression models
-- finding the perfect hyperparameters
-  - RandomizedSearchCV
-
-4. Validate with current season results
-
-# Data Sources:
-
-- nflreadpy
-  - https://github.com/nflverse/nflreadpy?tab=readme-ov-file for extracting data
-
-# TODO
-
-- [x] Task 1: Figure out what data to use and how to extract it
-- [x] Task 2: Insert data into database
-  - [x] Task 2.1: Clean the data by extracting only key information
-    - [x] Task 2.1.1: Add more features (opp DEF vs. position, team_implied_total, game spread, weather)
-  - [x] Task 2.2: Feature engineer to create our features for each player to train the model on
-  - [x] Task 2.3: Construct the training table to train the models on
-- [x] Task 3: Train different machine learning models and test them for accuracy
-- [ ] Task 4: Design a React frontend
-- [ ] Task 5: Design a FastAPI backend
-  - [ ] Task 5.1: Add schedule database so user doesn't have to manually enter opponent.

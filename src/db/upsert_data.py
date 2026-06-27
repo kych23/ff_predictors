@@ -1,12 +1,30 @@
+"""Idempotent upserts for the season-grain schema (DrafterSpec.md §4.3).
+
+Keeps the proven ``_chunk_iter`` + ``on_conflict_do_update`` pattern from the old
+weekly system; one upsert per table. The old precomputed-``fantasy_points_ppr``
+label path is **removed** here (M0 owns that transition, §4.4.1): ``weekly_stats_raw``
+stores only raw component stats and labels are computed in M1 from the scoring config.
+"""
 from __future__ import annotations
 
+import math
 from typing import Iterable
 
 import pandas as pd
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from .models import Game, Label, Player, Team
+from .models import (
+    Adp,
+    AdpCoverage,
+    IngestSnapshot,
+    Player,
+    PlayerIdMap,
+    Projection,
+    SeasonFeature,
+    SeasonLabel,
+    WeeklyStatsRaw,
+)
 
 
 def _chunk_iter(df: pd.DataFrame, size: int = 5_000) -> Iterable[pd.DataFrame]:
@@ -14,129 +32,114 @@ def _chunk_iter(df: pd.DataFrame, size: int = 5_000) -> Iterable[pd.DataFrame]:
         yield df.iloc[start : start + size]
 
 
+def _clean(v: object) -> object:
+    """Replace NaN/inf/pd.NA with None so psycopg2 never sends them to integer columns."""
+    if v is None:
+        return None
+    if v is pd.NA or v is pd.NaT:
+        return None
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    return v
+
+
+def _upsert(df: pd.DataFrame, model, index_elements, update_cols, session: Session) -> int:
+    """Generic chunked upsert: insert rows, update ``update_cols`` on conflict."""
+    if df is None or df.empty:
+        return 0
+    total = 0
+    for chunk in _chunk_iter(df):
+        records = [{k: _clean(v) for k, v in row.items()}
+                   for row in chunk.to_dict(orient="records")]
+        stmt = insert(model).values(records)
+        if update_cols:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=index_elements,
+                set_={c: getattr(stmt.excluded, c) for c in update_cols},
+            )
+        else:
+            stmt = stmt.on_conflict_do_nothing(index_elements=index_elements)
+        session.execute(stmt)
+        total += len(chunk)
+    return total
+
+
 def upsert_players(df: pd.DataFrame, session: Session) -> int:
-    if df.empty:
-        return 0
-    # Keep only supported offensive positions
-    allowed_positions = {"QB", "RB", "WR", "TE"}
-    df = df.copy()
-    if "position" in df.columns:
-        df["position"] = df["position"].astype(str).str.strip().str.upper()
-        df = df[df["position"].isin(allowed_positions)]
-    records = df.rename(
-        columns={
-            "gsis_id": "player_id",
-            "display_name": "name",
-            "position": "position",
-            "latest_team": "team_current",
-        }
-    )[ ["player_id", "name", "position", "team_current"] ]\
-        .copy()
-
-    # Normalize text fields and treat empty strings as missing
-    records["name"] = records["name"].astype(str).str.strip()
-    records["position"] = records["position"].astype(str).str.strip()
-    records.loc[records["name"] == "", "name"] = pd.NA
-    records.loc[records["position"] == "", "position"] = pd.NA
-    records = records.dropna(subset=["player_id", "name", "position"])  # enforce NOT NULLs
-
-    total = 0
-    for chunk in _chunk_iter(records):
-        stmt = insert(Player).values(chunk.to_dict(orient="records"))
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[Player.player_id],
-            set_={
-                "name": stmt.excluded.name,
-                "position": stmt.excluded.position,
-                "team_current": stmt.excluded.team_current,
-            },
-        )
-        session.execute(stmt)
-        total += len(chunk)
-    return total
+    cols = [
+        "player_id", "name", "position", "college", "rookie_year",
+        "draft_year", "draft_round", "draft_pick", "draft_team",
+        "birth_date", "latest_team",
+    ]
+    df = df.reindex(columns=cols)
+    df = df.dropna(subset=["player_id", "name"])
+    return _upsert(df, Player, [Player.player_id], cols[1:], session)
 
 
-def upsert_teams(df: pd.DataFrame, session: Session) -> int:
-    if df.empty:
-        return 0
-
-    abbrs = pd.Series(pd.concat([df["home_team"], df["away_team"]]).dropna().unique(), name="team_name")
-    records = pd.DataFrame({
-        "team_name": abbrs,
-    })
-
-    total = 0
-    for chunk in _chunk_iter(records):
-        stmt = insert(Team).values(chunk.to_dict(orient="records"))
-        stmt = stmt.on_conflict_do_nothing(index_elements=[Team.team_name])
-        session.execute(stmt)
-        total += len(chunk)
-    return total
+def upsert_player_id_map(df: pd.DataFrame, session: Session) -> int:
+    cols = [
+        "gsis_id", "fantasypros_id", "sleeper_id", "espn_id", "pfr_id",
+        "cfb_id", "merge_name", "years_exp",
+    ]
+    df = df.reindex(columns=cols).dropna(subset=["gsis_id"])
+    df = df.drop_duplicates(subset=["gsis_id"])
+    return _upsert(df, PlayerIdMap, [PlayerIdMap.gsis_id], cols[1:], session)
 
 
-def upsert_games(df: pd.DataFrame, session: Session) -> int:
-    if df.empty:
-        return 0
-    records = df.copy()
-    required = ["game_id", "season", "week", "home_team", "away_team"]
-    missing = [c for c in required if c not in records.columns]
-    if missing:
-        raise ValueError(f"Missing columns for games: {missing}")
-
-    cols = required
-    records = records[cols]
-
-    total = 0
-    for chunk in _chunk_iter(records):
-        stmt = insert(Game).values(chunk.to_dict(orient="records"))
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[Game.game_id],
-            set_={
-                "season": stmt.excluded.season,
-                "week": stmt.excluded.week,
-                "home_team": stmt.excluded.home_team,
-                "away_team": stmt.excluded.away_team,
-            },
-        )
-        session.execute(stmt)
-        total += len(chunk)
-    return total
+def upsert_weekly_stats_raw(df: pd.DataFrame, session: Session) -> int:
+    cols = ["player_id", "season", "week", "season_type", "team", "position", "stats",
+            "snapshot_id"]
+    df = df.reindex(columns=cols).dropna(subset=["player_id", "season", "week"])
+    idx = [WeeklyStatsRaw.player_id, WeeklyStatsRaw.season, WeeklyStatsRaw.week,
+           WeeklyStatsRaw.season_type]
+    return _upsert(df, WeeklyStatsRaw, idx, ["team", "position", "stats", "snapshot_id"], session)
 
 
-def upsert_labels(df: pd.DataFrame, session: Session) -> int:
-    if df.empty:
-        return 0
-    
-    if "fantasy_points_ppr" in df.columns:
-        df = df.assign(fantasy_points=df["fantasy_points_ppr"])
-    else:
-        raise ValueError("labels dataframe requires 'fantasy_points_ppr'")
-
-    required = ["player_id", "season", "week", "fantasy_points"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing columns for labels: {missing}")
-
-    records = df[required].copy()
-    # Filter to only players present in players table
-    existing_ids = set(r[0] for r in session.query(Player.player_id).all())
-    records = records[records["player_id"].astype(str).isin(existing_ids)].copy()
-    records["player_id"] = records["player_id"].astype(str).str.strip()
-    records.loc[records["player_id"] == "", "player_id"] = pd.NA
-    records["season"] = pd.to_numeric(records["season"], errors="coerce").astype("Int64")
-    records["week"] = pd.to_numeric(records["week"], errors="coerce").astype("Int64")
-    records["fantasy_points"] = pd.to_numeric(records["fantasy_points"], errors="coerce")
-    records = records.dropna(subset=["player_id", "season", "week", "fantasy_points"])  
-
-    total = 0
-    for chunk in _chunk_iter(records):
-        stmt = insert(Label).values(chunk.to_dict(orient="records"))
-        stmt = stmt.on_conflict_do_update(
-            constraint="labels_pkey",
-            set_={"fantasy_points": stmt.excluded.fantasy_points},
-        )
-        session.execute(stmt)
-        total += len(chunk)
-    return total
+def upsert_season_labels(df: pd.DataFrame, session: Session) -> int:
+    cols = ["player_id", "season", "games_played", "fantasy_points_total", "fppg",
+            "snapshot_id"]
+    df = df.reindex(columns=cols).dropna(subset=["player_id", "season"])
+    idx = [SeasonLabel.player_id, SeasonLabel.season]
+    return _upsert(df, SeasonLabel, idx, cols[2:], session)
 
 
+def upsert_season_features(df: pd.DataFrame, session: Session) -> int:
+    cols = ["player_id", "season", "position", "is_rookie", "as_of_date", "features",
+            "snapshot_id"]
+    df = df.reindex(columns=cols).dropna(subset=["player_id", "season"])
+    idx = [SeasonFeature.player_id, SeasonFeature.season]
+    return _upsert(df, SeasonFeature, idx, cols[2:], session)
+
+
+def upsert_projections(df: pd.DataFrame, session: Session) -> int:
+    cols = ["player_id", "season", "model_version", "position", "p10", "p50", "p90",
+            "pos_rank", "snapshot_id"]
+    df = df.reindex(columns=cols).dropna(subset=["player_id", "season", "model_version"])
+    idx = [Projection.player_id, Projection.season, Projection.model_version]
+    return _upsert(df, Projection, idx, cols[3:], session)
+
+
+def upsert_adp(df: pd.DataFrame, session: Session) -> int:
+    cols = ["source", "season", "format", "teams", "player_id", "name", "position",
+            "adp", "adp_stdev", "n_drafts", "snapshot_id"]
+    df = df.reindex(columns=cols).dropna(subset=["source", "season", "format", "teams", "player_id"])
+    idx = [Adp.source, Adp.season, Adp.format, Adp.teams, Adp.player_id]
+    return _upsert(df, Adp, idx, cols[5:], session)
+
+
+def upsert_adp_coverage(df: pd.DataFrame, session: Session) -> int:
+    cols = ["season", "format", "teams", "n_players", "ranking_eligible",
+            "sim_eligible", "snapshot_id"]
+    df = df.reindex(columns=cols)
+    idx = [AdpCoverage.season, AdpCoverage.format, AdpCoverage.teams]
+    return _upsert(df, AdpCoverage, idx, cols[3:], session)
+
+
+def upsert_ingest_snapshot(row: dict, session: Session) -> int:
+    stmt = insert(IngestSnapshot).values([row])
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[IngestSnapshot.snapshot_id],
+        set_={c: getattr(stmt.excluded, c) for c in
+              ("extracted_at", "nflreadpy_version", "notes", "coverage")},
+    )
+    session.execute(stmt)
+    return 1

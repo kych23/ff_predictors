@@ -9,6 +9,7 @@ ipython_config.py
 .python-version
 
 .env
+.env.backup
 .venv
 env/
 venv/
@@ -23,9 +24,10 @@ Thumbs.db
 
 notes.md
 
-# Frontend
-frontend/node_modules/
-frontend/.next/
-frontend/out/
-frontend/build/
-frontend/.env.local
+# Models and Data
+models/
+*.pkl
+# local HTTP cache (FFC/CFBD) — regenerable, not source
+data/
+
+.agents/
