@@ -98,9 +98,45 @@ def fit_full(ds: Dataset, *, params: Optional[dict] = None) -> QuantileGBM:
     return model
 
 
+def project_forward(full_model: QuantileGBM, ds_full: Dataset,
+                    calibrator: IntervalCalibrator, *,
+                    snapshot_id: Optional[str] = None,
+                    cfg: Optional[LeagueConfig] = None) -> pd.DataFrame:
+    """Generate projections for unlabeled (future) seasons using the full-data model.
+
+    ``ds_full`` is loaded with ``require_label=False`` so it contains ALL seasons,
+    including those with no outcomes yet (e.g. 2026). We project only the rows that
+    have no label (y is NaN) — these are the forward seasons.
+    """
+    cfg = cfg or load_config()
+    future_mask = ds_full.y.isna()
+    if not future_mask.any():
+        return pd.DataFrame()
+    X_future = ds_full.X[future_mask].reset_index(drop=True)
+    meta_future = ds_full.meta[future_mask].reset_index(drop=True)
+
+    preds = full_model.predict(X_future)
+    # Apply per-bucket calibration widening (same as OOF path).
+    X_for_bucket = X_future.copy()
+    X_for_bucket["is_rookie"] = meta_future["is_rookie"].values
+    for col in ("seasons_of_history", "team_changed"):
+        if col not in X_for_bucket.columns:
+            X_for_bucket[col] = np.nan
+    bucket_col = X_for_bucket.apply(assign_bucket, axis=1)
+    preds = calibrator.transform(preds, bucket_col)
+
+    out = meta_future.copy()
+    out["p10"] = preds["p10"].values
+    out["p50"] = preds["p50"].values
+    out["p90"] = preds["p90"].values
+    out = _add_pos_rank(out)
+    out["snapshot_id"] = snapshot_id
+    return out
+
+
 def train_and_write(snapshot_id: Optional[str] = None, *,
                     config_path: Optional[str] = None) -> int:
-    """DB path: load dataset, produce OOF projections, write the ``projections`` table."""
+    """DB path: load dataset, produce OOF + forward projections, write ``projections``."""
     from src.db.session import SessionLocal
     from src.db.upsert_data import upsert_projections
     from .dataset import load_dataset
@@ -108,6 +144,7 @@ def train_and_write(snapshot_id: Optional[str] = None, *,
     cfg = load_config(config_path)
     session = SessionLocal()
     try:
+        # OOF projections on labeled seasons (validation path).
         ds = load_dataset(session, snapshot_id, cfg=cfg, require_label=True)
         if len(ds) == 0:
             logger.warning("empty dataset — nothing to train")
@@ -121,8 +158,24 @@ def train_and_write(snapshot_id: Optional[str] = None, *,
         n = upsert_projections(
             out[["player_id", "season", "model_version", "position",
                  "p10", "p50", "p90", "pos_rank", "snapshot_id"]], session)
+        logger.info("projections written: %d OOF (model_version=%s)", n, cfg.model_version)
+
+        # Forward projections for unlabeled seasons (serving path, e.g. 2026).
+        ds_all = load_dataset(session, snapshot_id, cfg=cfg, require_label=False)
+        full_model = fit_full(ds)
+        fwd = project_forward(full_model, ds_all, result.calibrator,
+                              snapshot_id=snapshot_id, cfg=cfg)
+        if not fwd.empty:
+            fwd["model_version"] = cfg.model_version
+            n_fwd = upsert_projections(
+                fwd[["player_id", "season", "model_version", "position",
+                     "p10", "p50", "p90", "pos_rank", "snapshot_id"]], session)
+            logger.info("projections written: %d forward (seasons: %s)",
+                        n_fwd, sorted(fwd["season"].unique().tolist()))
+            n += n_fwd
+
         session.commit()
-        logger.info("projections written: %d (model_version=%s)", n, cfg.model_version)
+        logger.info("projections total: %d (model_version=%s)", n, cfg.model_version)
         return n
     except Exception:
         session.rollback()
