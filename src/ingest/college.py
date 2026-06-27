@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import unicodedata
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -26,6 +28,34 @@ from .player_ids import normalize_name
 logger = logging.getLogger(__name__)
 
 CFBD_BASE = "https://api.collegefootballdata.com"
+
+# Known abbreviation → full name so nflverse short forms match CFBD long forms.
+_COLLEGE_ABBREV = {
+    "usc": "southern california",
+    "lsu": "louisiana state",
+    "ucla": "california los angeles",
+    "smu": "southern methodist",
+    "tcu": "texas christian",
+    "vmi": "virginia military",
+    "unlv": "nevada las vegas",
+    "utep": "texas el paso",
+    "utsa": "texas san antonio",
+    "fiu": "florida international",
+    "fau": "florida atlantic",
+    "ole miss": "mississippi",
+}
+
+
+def _normalize_college(name: Optional[str]) -> str:
+    """Lowercase, strip accents/punctuation/filler; expand known abbreviations."""
+    if not name or (isinstance(name, float) and pd.isna(name)):
+        return ""
+    s = unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode()
+    s = s.lower()
+    s = re.sub(r"[^a-z ]", " ", s)
+    s = re.sub(r"\b(university|college|the|of|at|a&m)\b", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return _COLLEGE_ABBREV.get(s, s)
 
 # Conference -> competition level (Power 5 / Group of 5 / FCS), §4.5.1.
 _P5 = {"SEC", "Big Ten", "Big 12", "ACC", "Pac-12", "Pac-10"}
@@ -93,6 +123,7 @@ def build_college_features(
     rookie_seasons: Dict[str, int],
     bridge: pd.DataFrame,
     api_key: Optional[str] = None,
+    birth_dates: Optional[Dict[str, str]] = None,
 ) -> pd.DataFrame:
     """Build the college feature block keyed by gsis_id for the given rookies.
 
@@ -141,10 +172,31 @@ def build_college_features(
         college, left_on="cfb_player_id", right_on="playerId", how="inner"
     )
     # Bridge step 2: fuzzy name fallback for rookies with no cfb_player_id match.
+    # Primary: (norm_name, norm_college) — highest precision; secondary: norm_name only
+    # when the match is unique (one CFBD player per name).
     unmatched_gsis = set(rookie_seasons) - set(matched["gsis_id"])
     if unmatched_gsis:
-        fb = br[br["gsis_id"].isin(unmatched_gsis)]
-        fuzzy = fb.merge(college, on="norm_name", how="inner", suffixes=("", "_c"))
+        fb = br[br["gsis_id"].isin(unmatched_gsis)].copy()
+        fb["norm_college"] = fb.get("college").map(_normalize_college)
+        college_nc = college.copy()
+        college_nc["norm_college"] = college_nc.get("team").map(_normalize_college)
+
+        fuzzy = fb.merge(college_nc, on=["norm_name", "norm_college"],
+                         how="inner", suffixes=("", "_c"))
+
+        still_unmatched = unmatched_gsis - set(fuzzy.get("gsis_id", pd.Series()))
+        if still_unmatched:
+            fb2 = fb[fb["gsis_id"].isin(still_unmatched)]
+            name_matches = fb2.merge(college_nc, on="norm_name",
+                                     how="inner", suffixes=("", "_c"))
+            # Only keep rookies where norm_name maps to exactly one CFBD player.
+            unique_gsis = (
+                name_matches.groupby("gsis_id")["playerId"].nunique()
+                .pipe(lambda s: s[s == 1].index)
+            )
+            name_matches = name_matches[name_matches["gsis_id"].isin(unique_gsis)]
+            fuzzy = pd.concat([fuzzy, name_matches], ignore_index=True)
+
         if not fuzzy.empty:
             matched = pd.concat([matched, fuzzy], ignore_index=True)
 
@@ -157,6 +209,9 @@ def build_college_features(
     if not rest.empty:
         rest = rest.sort_values("college_year").drop_duplicates("gsis_id", keep="last")
     matched = pd.concat([final, rest], ignore_index=True).drop_duplicates(subset=["gsis_id"])
+
+    if birth_dates:
+        matched["birth_date"] = matched["gsis_id"].map(birth_dates)
 
     return _derive_college_metrics(matched)
 
@@ -234,9 +289,18 @@ def _derive_college_metrics(df: pd.DataFrame) -> pd.DataFrame:
     # passing rates below), so leave it NaN rather than a noise value from a trick play.
     out["college_dominator"] = dominator.where(~pos.eq("QB"))
 
-    # Not derivable from this endpoint (no targets, no birthdate) — honest NaN, NOT stubbed.
-    out["college_target_share"] = pd.NA   # needs team targets; CFBD season has only REC
-    out["breakout_age"] = pd.NA           # needs per-year age; deferred to M7
+    # breakout_age = age during final college season (college_year − birth_year).
+    # birth_date comes from nflverse players table, joined before this call.
+    if "birth_date" in df.columns and "college_year" in df.columns:
+        birth_year = pd.to_datetime(df["birth_date"], errors="coerce").dt.year
+        out["breakout_age"] = pd.to_numeric(df["college_year"], errors="coerce") - birth_year
+    else:
+        out["breakout_age"] = pd.NA
+
+    # college_target_share: CFBD /stats/player/season has no targets column (only REC).
+    # Dropped — not stubbable without introducing a NaN-heavy feature. Dominator
+    # captures the same signal for WR/TE more cleanly.
+
     out["competition_level"] = df.get("conference").map(_competition_level) if "conference" in df else None
 
     # QB college rates (per-opportunity, GP-free).

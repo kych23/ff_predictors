@@ -31,7 +31,7 @@ from src.db.upsert_data import (
 
 from . import sources
 from .adp import FFCClient, build_adp_season
-from .player_ids import build_crosswalk, fantasypros_lookup, name_lookup
+from .player_ids import build_crosswalk, fantasypros_lookup, name_lookup, name_position_lookup
 
 logger = logging.getLogger(__name__)
 

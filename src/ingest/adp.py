@@ -1,12 +1,8 @@
-"""Fantasy Football Calculator ADP client (DrafterSpec.md §4.2.2).
-
-QUARANTINED — this is the market side of the ADP wall (§4.0). Only ``ingest``,
-``recommender``, and ``benchmark`` may import it; ``projection`` and ``features``
-must never touch ADP.
+"""Fantasy Football Calculator ADP client.
 
 Fetches full-PPR ADP by (teams, year) via the resilient ``ingest/http.py`` client,
 resolves FFC names to ``gsis_id`` through the crosswalk, and records per-season
-coverage so benchmark eligibility (§4.0) is derivable. Cache TTL = 24h for the
+coverage so benchmark eligibility is derivable. Cache TTL = 24h for the
 current season (FFC updates daily), immutable for past seasons. On draft day, if
 FFC is unreachable the resilient client serves the last cached ADP with a loud
 staleness warning rather than failing.

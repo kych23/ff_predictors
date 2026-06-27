@@ -226,7 +226,8 @@ def build_features_range(
         for pid, y in zip(players["player_id"].astype(str), ry)
         if pd.notna(y) and start <= y <= end
     }
-    college = build_college_features(rookie_seasons, build_college_bridge())
+    birth_dates = dict(zip(players["player_id"].astype(str), players.get("birth_date", pd.Series(dtype=object))))
+    college = build_college_features(rookie_seasons, build_college_bridge(), birth_dates=birth_dates)
     n_college = int(college["has_college_stats"].fillna(0).sum()) if not college.empty else 0
     logger.info("college features: %d rookies with real stats (of %d rookies)",
                 n_college, len(rookie_seasons))
