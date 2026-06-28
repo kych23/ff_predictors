@@ -31,6 +31,8 @@ models/
 data/
 
 .agents/
+.claude/
+.pytest_cache/
 
 # live-draft save files (event log per draft)
 draft_state_*.json
