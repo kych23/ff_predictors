@@ -32,7 +32,10 @@ data/
 
 .agents/
 .claude/
+CLAUDE.md
 .pytest_cache/
 
 # live-draft save files (event log per draft)
 draft_state_*.json
+
+DrafterSpec.md
