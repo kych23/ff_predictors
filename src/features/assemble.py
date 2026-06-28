@@ -27,6 +27,7 @@ from . import leakage_guard as lg
 from .prior_production import build_prior_production
 from .role_change import build_role_change
 from .rookies import build_rookie_features
+from .team_context import CTX_COLS, build_team_context
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +99,15 @@ def assemble_season(
     role = build_role_change(depth_y, rosters_y, rosters_prev, stats_prev)
 
     # --- player universe for Y: rostered in Y, plus prior-production players ---
+    # When current-year rosters are available, use them as the authoritative set —
+    # free agents and cut players won't appear in rosters_y even if they produced in Y-1.
     universe = set()
     if not rosters_y.empty:
         universe |= set(rosters_y["gsis_id"].dropna().astype(str))
-    universe |= set(prior["player_id"].astype(str)) if not prior.empty else set()
-    universe |= set(role["player_id"].dropna().astype(str)) if not role.empty else set()
+    else:
+        # No roster data for this season — fall back to prior production + role signals.
+        universe |= set(prior["player_id"].astype(str)) if not prior.empty else set()
+        universe |= set(role["player_id"].dropna().astype(str)) if not role.empty else set()
 
     # rookies = rookie_year == Y (no prior NFL production)
     p = players.copy()
@@ -143,6 +148,22 @@ def assemble_season(
         )
     else:
         df["position_changed"] = 0
+
+    # --- market team scoring context (preseason-Y artifact: Week-1 betting line) ---
+    # NOT routed through leakage_guard.prior_seasons — this is intentionally the
+    # CURRENT season's preseason line (known pre-kickoff), attached by season-Y team.
+    sched_all = frames.get("schedules", pd.DataFrame())
+    sched_y = (sched_all[pd.to_numeric(sched_all.get("season"), errors="coerce") == Y]
+               if sched_all is not None and not sched_all.empty else pd.DataFrame())
+    team_ctx = build_team_context(sched_y)
+    team_key = df["team_y"].fillna(df["team"]) if "team_y" in df.columns else df.get("team")
+    if not team_ctx.empty and team_key is not None:
+        ctx_idx = team_ctx.set_index("team")
+        for col in CTX_COLS:
+            df[col] = team_key.astype(str).map(ctx_idx[col])
+    else:
+        for col in CTX_COLS:
+            df[col] = np.nan
 
     # age (explicit feature) + season_length + indicator defaults
     birth = dict(zip(p["player_id"], p.get("birth_date")))
@@ -215,6 +236,8 @@ def build_features_range(
         "depth": sources.load_depth_charts(seasons),
         "rosters": sources.load_rosters(load_seasons),
         "combine": sources.load_combine(),
+        # Week-1 betting lines for the TARGET seasons only (preseason-Y market context).
+        "schedules": sources.load_schedules(seasons),
     }
     kickoffs = sources.week1_kickoff_dates(seasons)
 

@@ -7,17 +7,7 @@ NDCG@k (primary gate metric, §4.7.1), Spearman, top-N hit rate, and pinball
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 from scipy.stats import spearmanr
-
-
-def mae(y_true, y_pred) -> float:
-    return float(np.nanmean(np.abs(np.asarray(y_true) - np.asarray(y_pred))))
-
-
-def rmse(y_true, y_pred) -> float:
-    d = np.asarray(y_true) - np.asarray(y_pred)
-    return float(np.sqrt(np.nanmean(d ** 2)))
 
 
 def spearman(y_true, y_pred) -> float:
@@ -69,22 +59,9 @@ def top_n_hit_rate(scores, relevance, n: int) -> float:
     return len(pred_top & true_top) / len(true_top)
 
 
-def regression_report(y_true, y_pred) -> dict:
-    return {"mae": mae(y_true, y_pred), "rmse": rmse(y_true, y_pred),
-            "spearman": spearman(y_true, y_pred)}
-
-
 def interval_coverage(y_true, p_low, p_high) -> float:
     y = np.asarray(y_true, dtype=float)
     lo = np.asarray(p_low, dtype=float)
     hi = np.asarray(p_high, dtype=float)
     inside = (y >= lo) & (y <= hi)
     return float(np.nanmean(inside.astype(float)))
-
-
-def per_position_ndcg(df: pd.DataFrame, score_col: str, rel_col: str, k: int,
-                      pos_col: str = "position") -> dict:
-    out = {}
-    for pos, grp in df.groupby(pos_col):
-        out[pos] = ndcg_at_k(grp[score_col], grp[rel_col], min(k, len(grp)))
-    return out

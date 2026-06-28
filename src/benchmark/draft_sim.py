@@ -11,7 +11,6 @@ This package may read ADP (benchmark side of the wall).
 """
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence
 
@@ -20,11 +19,9 @@ import pandas as pd
 
 from src.config import LeagueConfig, load_config
 from src.recommender.recommend import build_replacement_from_projections, recommend
-from src.recommender.roster_state import RosterState, overall_pick
+from src.recommender.roster_state import RosterState
 
 from .report import PairedTest, paired_test
-
-logger = logging.getLogger(__name__)
 
 
 def _bot_pick(board: pd.DataFrame, drafted: set, slot_fill: Dict[str, int],
@@ -179,8 +176,7 @@ def run_draft_sim(
             board = board.merge(proj_s[["player_id", "position"]], on="player_id", how="left")
         pos_map = dict(zip(board["player_id"], board["position"]))
         fppg_map = dict(zip(lbl_s["player_id"], lbl_s["fppg"]))
-        replacement = build_replacement_from_projections(
-            proj_s.rename(columns={"position": "position"}), cfg=cfg)
+        replacement = build_replacement_from_projections(proj_s, cfg=cfg)
 
         for slot in slots:
             rosters = simulate_draft(board, cfg, slot, replacement)

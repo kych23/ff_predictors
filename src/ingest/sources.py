@@ -30,7 +30,7 @@ def _safe_load_seasons(loader_fn, seasons: list, label: str) -> pd.DataFrame:
             if ("404" in msg or "Not Found" in msg
                     or "ConnectionError" in type(e).__name__
                     or "Season must be between" in msg
-                    or "season" in msg.lower() and "current_season" in msg.lower()):
+                    or ("season" in msg.lower() and "current_season" in msg.lower())):
                 _log.warning("%s: skipping season %d (not yet available)", label, season)
             else:
                 raise

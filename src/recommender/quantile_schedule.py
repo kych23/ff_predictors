@@ -1,7 +1,7 @@
 """Round -> risk appetite schedule (DrafterSpec.md §4.8.1 / Fork 1).
 
 Swaps the point estimate for a round-shifted quantile: floor-leaning early (~P25,
-protect starters) shifting to ceiling-leaning late (~P75/P90, upside swings). One
+protect starters) shifting to ceiling-leaning late (~P85, upside swings). One
 tunable knob — this is where the risk edge changes picks. Using only the middle
 estimate would discard the uncertainty the engine works to produce (§3).
 
@@ -24,14 +24,6 @@ def round_to_alpha(draft_round: int, total_rounds: int,
     frac = (draft_round - 1) / (total_rounds - 1)
     frac = min(max(frac, 0.0), 1.0)
     return early + frac * (late - early)
-
-
-def value_at_alpha(p10: float, p50: float, p90: float, alpha: float) -> float:
-    """Piecewise-linear interpolation of a value at quantile ``alpha`` from P10/P50/P90."""
-    xs = [0.10, 0.50, 0.90]
-    ys = [p10, p50, p90]
-    a = min(max(alpha, xs[0]), xs[-1])  # clamp into supported range
-    return float(np.interp(a, xs, ys))
 
 
 def value_vector_at_alpha(p10, p50, p90, alpha: float) -> np.ndarray:

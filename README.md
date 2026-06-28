@@ -28,59 +28,79 @@ League settings live in `config/league.yaml`.
 
 ## Pipeline
 
-Run in order once you have a `DATABASE_URL`:
+Each season: wipe the DB, then run the pipeline script.
+
+**Step 0 — wipe Supabase** (run in Supabase SQL Editor):
+
+```sql
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+```
+
+**Step 1 — run full pipeline** (defaults to current year):
 
 ```bash
-# 1. Pull NFL data + ADP into DB
-python scripts/seed_db.py --start 2012 --end 2025
+bash scripts/run_pipeline.sh
+```
 
-# 2. Compute per-season labels (FPPG)
-python scripts/build_labels.py --snapshot-id <id>
+Or manually, step by step:
 
-# 3. Build model features
-python scripts/build_features.py --start 2012 --end 2025 --snapshot-id <id>
-
-# 4. Train pooled quantile model
-python scripts/train_projection.py --snapshot-id <id>
-
-# 5. Evaluate vs ADP baseline
-python scripts/run_benchmark.py --snapshot-id <id>
+```bash
+python scripts/seed_db.py --start 2012 --end 2026
+python scripts/build_labels.py
+python scripts/build_features.py --start 2012 --end 2026
+python scripts/train_projection.py
+python scripts/run_benchmark.py --with-sim
 ```
 
 ## Live Draft
 
 ```bash
-python scripts/draft.py --season 2025 --position 4   # --position = your draft slot (1..teams)
+python scripts/draft.py --season 2026 --position 4   # --position = your draft slot (1..teams)
+python scripts/draft.py --season 2026 --position 4 --resume   # continue an in-progress draft
 ```
 
 Commands during draft:
 
-- `go` — auto-advance opponents by ADP up to your next pick
+- `go` — auto-advance opponents by ADP (falls back to projection order when ADP is exhausted in late rounds) up to your next pick; blocked if it's your own turn
 - `me <player name>` — record your pick (fuzzy match; same-name players prompt to disambiguate by position/team)
-- `<player name>` — record an opponent's pick
+- `<player name>` — record an opponent's pick (on your turn, a bare name is recorded as **your** pick)
+- `skip` — advance the pick counter by one opponent pick without naming the player (useful when ADP is fully exhausted)
+- `undo` — revert the last command (a pick, a `go` batch, or a skip); state is rebuilt by replaying the pick log
+- `roster` — show your current team, open starter slots, and any bye-week stacks
 - `board` — reprint the recommendation board
 - `quit` — exit
 
-At each of your picks it shows the **top 5** candidates with a **FIT** score and the gap to the top pick, so you decide rather than blindly taking #1:
+The header shows `** YOUR PICK (round N) **` when it's your turn, so you know to use `me <name>` instead of `go`.
+
+**Crash-safe**: every pick is written to `draft_state_<season>_slot<pos>.json` as it happens. If the CLI dies mid-draft (network blip, accidental Ctrl-C), relaunch with `--resume` to pick up exactly where you left off. The save file is the same event log that powers `undo`.
+
+At each of your picks it shows the **top 10** candidates with a **FIT** score and the gap to the top pick, so you decide rather than blindly taking #1:
 
 ```
-  Round 1 (risk quantile 0.25)
-  #  PLAYER             POS    FIT    Δ#1
-  1  Justin Jefferson   WR    2.97    —
-  2  Puka Nacua         WR    1.06  -1.91
-  3  Ja'Marr Chase      WR    0.91  -2.06
-  4  A.J. Brown         WR    0.58  -2.39
-  5  Travis Kelce       TE    0.17  -2.80
-  read: CLEAR #1 — leads #2 by 1.91
+  Round 1  (risk quantile 0.25)
+   #  PLAYER             POS    FIT     Δ#1   proj    ADP
+   1  Justin Jefferson   WR    2.97     —    12.4   10.1
+   2  Puka Nacua         WR    1.06   -1.91  15.3    3.0
+   3  Ja'Marr Chase      WR    0.91   -2.06  15.6    3.1
+   4  A.J. Brown         WR    0.58   -2.39  13.1   18.4
+   5  Travis Kelce       TE    0.17   -2.80   8.1   42.0
+   ... (top 10 shown)
+   read: CLEAR #1 — leads #2 by 1.91
+   runs (picks 1→13, 12 picks): QB 1! | RB 4 | WR 6 | TE 2
 ```
 
 - **FIT** — the VONA fit-for-your-roster score (higher = better pick now).
-- **Δ#1** — gap to the top pick; small gaps across the 5 mean the choices are about equal.
-- **read** — auto-classifies the spread: _CLEAR #1_ (leads #2 by ≥1.0), _TOSS-UP_ (top 5 within 0.5 → pick your preference), or a _slight edge_ in between.
+- **Δ#1** — gap to the top pick; small gaps across the board mean the choices are about equal.
+- **proj** — the risk-adjusted projection at this round's target quantile; **ADP** — the market's average draft position, so you can see where FIT disagrees with the market.
+- **read** — auto-classifies the spread: _CLEAR #1_ (leads #2 by ≥1.0), _TOSS-UP_ (top 10 within 0.5 → pick your preference), or a _slight edge_ in between.
+- **runs** — how many players at each position the market expects to go before your next pick (`!` = 0–1 left, i.e. that position is running out).
 
 ## Architecture
 
-**ADP wall**: `src/projection/` and `src/features/` never import ADP or market data. Only `src/ingest/adp.py`, `src/recommender/`, and `src/benchmark/` may touch ADP.
+**ADP wall**: `src/projection/` and `src/features/` never import the `adp` module — the **draft market** (ADP) stays quarantined so the engine is measured against it, never trained on it. Only `src/ingest/adp.py`, `src/recommender/`, and `src/benchmark/` may touch ADP.
+
+**Team scoring context** (deliberate market signal, *not* an ADP-wall violation): `src/features/team_context.py` adds a forward-looking view of each player's offense from the **Week-1 betting line** (nflverse `total_line`/`spread_line`) — `team_ctx_implied_pts = total_line/2 ± spread_line/2`, plus the game total and the team's spread. Week-1 lines are posted pre-kickoff, so it's a preseason-safe artifact (like the Week-1 depth chart), attached to each player by their season-Y team. This intentionally puts *game-line* market data into the projection features (the ADP/draft-market wall is untouched); it prices the offseason roster/coaching changes lagged production can't see. Uses `total_line`/`spread_line` only — never `total` (the final score, which would leak).
 
 **Model**: one pooled `QuantileGBM` (position as categorical feature) — not per-position models. Quantile monotonicity via rearrangement (Chernozhukov 2010), not clipping.
 
@@ -114,15 +134,15 @@ Engine beats ADP in **8 of 8** seasons. Honest ceiling: ~8–9 evaluable seasons
 
 ### Tier-3 — risk calibration (interval honesty)
 
-| Bucket           | n    | P10–P90 coverage | nominal | pinball P10 | pinball P50 | pinball P90 |
-| ---------------- | ---- | ---------------- | ------- | ----------- | ----------- | ----------- |
-| overall          | 3386 | 0.771            | 0.80    | 0.487       | 1.265       | 0.657       |
-| established_vet  | 1646 | 0.765            | 0.80    | 0.481       | 1.201       | 0.637       |
-| rookie           | 479  | 0.756            | 0.80    | 0.549       | 1.477       | 0.791       |
-| second_year      | 566  | 0.769            | 0.80    | 0.475       | 1.317       | 0.691       |
-| team_changed_vet | 695  | 0.796            | 0.80    | 0.468       | 1.230       | 0.584       |
+| Bucket           | n    | P10–P90 coverage | nominal |
+| ---------------- | ---- | ---------------- | ------- |
+| overall          | 3386 | 0.804            | 0.80    |
+| established_vet  | 1646 | 0.801            | 0.80    |
+| rookie           | 479  | 0.804            | 0.80    |
+| second_year      | 566  | 0.802            | 0.80    |
+| team_changed_vet | 695  | 0.816            | 0.80    |
 
-Per-type calibration is active: **rookies are the most under-covered group** (0.756) — exactly the overconfidence the per-type widening targets. Intervals still run slightly narrow overall (~0.77 vs 0.80 target); a conformal per-bucket widening is the planned refinement.
+Coverage is from the **split-conformal per-bucket** calibrator (`src/projection/calibrate.py`), validated on the 2026-06-27 run (with the `team_context` feature). The width scale per side is a quantile of the normalized nonconformity score (residual ÷ predicted half-width), which targets the empirical coverage fraction directly — unlike the earlier mean-matching scale, which left intervals narrow (~0.77, rookies worst at 0.756) because matching *mean* half-widths under-covers whenever per-row widths are heterogeneous (exactly the rookie case). Every bucket now sits on the 0.80 nominal; the rookie bucket — the whole reason for per-type calibration — went 0.756 → 0.804. The calibrator only ever widens (scale floored at 1.0), so well-calibrated buckets are left untouched.
 
 ### Tier-2 — recommender vs ADP bots
 
@@ -130,13 +150,13 @@ Draft simulation: our recommender vs 11 bots drafting by ADP, on `SIM_ELIGIBLE` 
 
 | Metric              | mean(ours − bots) | Wilcoxon p | bootstrap 95% CI | wins    | Result   |
 | ------------------- | ----------------- | ---------- | ---------------- | ------- | -------- |
-| Starting-lineup PPG | **+4.62**         | 0.0008     | [+2.16, +6.97]   | 28 / 35 | **PASS** |
+| Starting-lineup PPG | **+4.74**         | 0.000277   | [+2.64, +6.94]   | 28 / 35 | **PASS** |
 
-The recommender — not just the engine — beats the market. (The margin is a touch lower than an earlier run because the ADP namesake-join fix now lets the bots draft the previously-unmatched stars too — a fairer comparison; win rate rose 25→28 of 35.) Down years like 2024 still pull the mean, but the paired edge is robust.
+The recommender — not just the engine — beats the market. Adding the `team_context` market feature lifted this tier (mean edge +3.97 → +4.74, win rate 25 → 28 of 35, p 0.0014 → 0.000277) while leaving Tier-1 flat within its CI. Down years like 2024 still pull the mean, but the paired edge is robust.
 
 ## Data Sources
 
-- [nflverse](https://www.nflverse.com/) — play-by-play, rosters, combine, draft picks
+- [nflverse](https://www.nflverse.com/) — play-by-play, rosters, combine, draft picks, **Week-1 betting lines** (`total_line`/`spread_line`, 100% coverage 2012–2025) for team scoring context
 - [Fantasy Football Calculator](https://fantasyfootballcalculator.com/) — full-PPR ADP
 - [CFBD](https://collegefootballdata.com/) — college stats (optional)
 
@@ -149,7 +169,7 @@ The recommender — not just the engine — beats the market. (The margin is a t
 - **FPPG** — Fantasy Points Per Game: the model's prediction target (a per-game _rate_, not a season total — so it isn't distorted by missed games).
 - **VOR** — Value Over Replacement: a player's projected value minus a freely-available "replacement" player at his position (the first one who doesn't earn a starting slot).
 - **VONA** — Value Of Not Available: VOR _now_ minus the expected value of the best same-position player still available at your _next_ pick. Encodes "take the scarce position now, wait on the deep one."
-- **FIT** — the draft UI's per-player number: a player's VONA score at your current pick. Higher = better fit for your roster right now; the spread across the top 5 shows whether one pick clearly dominates or the choices are about equal.
+- **FIT** — the draft UI's per-player number: a player's VONA score at your current pick. Higher = better fit for your roster right now; the spread across the top 10 shows whether one pick clearly dominates or the choices are about equal.
 
 **Model terms**
 

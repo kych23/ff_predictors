@@ -1,6 +1,4 @@
 """Snake pick layout (DrafterSpec.md §4.8.1)."""
-import pytest
-
 from src.config import load_config
 from src.recommender.roster_state import RosterState, my_pick_sequence, overall_pick
 

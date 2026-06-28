@@ -9,15 +9,18 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from src.db.session import resolve_snapshot
 from src.projection.train import train_and_write
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train projection engine (M3).")
-    parser.add_argument("--snapshot-id", type=str, default=None)
+    parser.add_argument("--snapshot-id", type=str, default=None,
+                        help="Ingest snapshot to use (default: latest).")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    n = train_and_write(snapshot_id=args.snapshot_id)
+    sid = resolve_snapshot(args.snapshot_id)
+    n = train_and_write(snapshot_id=sid)
     print(f"projections written: {n}")
 
 

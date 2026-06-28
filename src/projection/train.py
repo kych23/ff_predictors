@@ -99,17 +99,17 @@ def fit_full(ds: Dataset, *, params: Optional[dict] = None) -> QuantileGBM:
 
 
 def project_forward(full_model: QuantileGBM, ds_full: Dataset,
-                    calibrator: IntervalCalibrator, *,
+                    calibrator: IntervalCalibrator,
+                    labeled_seasons: set, *,
                     snapshot_id: Optional[str] = None,
                     cfg: Optional[LeagueConfig] = None) -> pd.DataFrame:
-    """Generate projections for unlabeled (future) seasons using the full-data model.
+    """Generate projections for seasons with no labels (e.g. 2026) using the full-data model.
 
-    ``ds_full`` is loaded with ``require_label=False`` so it contains ALL seasons,
-    including those with no outcomes yet (e.g. 2026). We project only the rows that
-    have no label (y is NaN) — these are the forward seasons.
+    ``labeled_seasons`` is the set of seasons in the training dataset; only rows
+    from seasons NOT in that set are projected (the true forward/future rows).
     """
     cfg = cfg or load_config()
-    future_mask = ds_full.y.isna()
+    future_mask = ~ds_full.meta["season"].isin(labeled_seasons)
     if not future_mask.any():
         return pd.DataFrame()
     X_future = ds_full.X[future_mask].reset_index(drop=True)
@@ -163,9 +163,22 @@ def train_and_write(snapshot_id: Optional[str] = None, *,
         # Forward projections for unlabeled seasons (serving path, e.g. 2026).
         ds_all = load_dataset(session, snapshot_id, cfg=cfg, require_label=False)
         full_model = fit_full(ds)
-        fwd = project_forward(full_model, ds_all, result.calibrator,
+        labeled_seasons = set(ds.meta["season"].unique())
+        fwd = project_forward(full_model, ds_all, result.calibrator, labeled_seasons,
                               snapshot_id=snapshot_id, cfg=cfg)
         if not fwd.empty:
+            # Delete stale forward projections before inserting — upsert won't remove
+            # players who were dropped from the universe (e.g. retired players).
+            from sqlalchemy import delete as sa_delete
+            from src.db.models import Projection as ProjectionModel
+            forward_seasons = sorted(fwd["season"].unique().tolist())
+            # Delete ALL forward projections for these seasons (any model_version) so
+            # stale rows from prior runs don't persist when the model_version changes.
+            session.execute(
+                sa_delete(ProjectionModel).where(
+                    ProjectionModel.season.in_(forward_seasons),
+                )
+            )
             fwd["model_version"] = cfg.model_version
             n_fwd = upsert_projections(
                 fwd[["player_id", "season", "model_version", "position",

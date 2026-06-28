@@ -21,10 +21,10 @@ from sqlalchemy import select
 from src.benchmark.calibration import run_calibration_benchmark
 from src.benchmark.draft_sim import run_draft_sim
 from src.benchmark.ranking import run_ranking_benchmark
-from src.benchmark.report import DATA_COMPLETE_ERA_START, format_gate, paired_test
+from src.benchmark.report import DATA_COMPLETE_ERA_START, format_gate
 from src.config import load_config
 from src.db.models import Adp, AdpCoverage, Projection, SeasonFeature, SeasonLabel
-from src.db.session import SessionLocal
+from src.db.session import SessionLocal, resolve_snapshot
 
 
 def _read(session, model, cols) -> pd.DataFrame:
@@ -34,10 +34,12 @@ def _read(session, model, cols) -> pd.DataFrame:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the benchmark scoreboard (M4).")
-    parser.add_argument("--snapshot-id", type=str, default=None)
+    parser.add_argument("--snapshot-id", type=str, default=None,
+                        help="Ingest snapshot to use (default: latest).")
     parser.add_argument("--with-sim", action="store_true", help="Run Tier-2 draft sim (slow)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    resolve_snapshot(args.snapshot_id)  # validate a snapshot exists + log it
     cfg = load_config()
 
     session = SessionLocal()

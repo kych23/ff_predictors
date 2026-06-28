@@ -12,7 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
-import numpy as np
 import pandas as pd
 
 from src.projection.eval import ndcg_at_k, spearman, top_n_hit_rate
@@ -26,9 +25,6 @@ DEFAULT_KS = (84, 36)  # startable universe (12*7) and early-round emphasis
 class RankingResult:
     per_season: pd.DataFrame      # season, k, ndcg_engine, ndcg_adp, spearman_*, hit_*
     gate: dict                    # k -> PairedTest (engine vs ADP NDCG)
-
-    def gate_passes(self, k: int = 84) -> bool:
-        return k in self.gate and self.gate[k].significant
 
 
 def _eval_season(df: pd.DataFrame, ks: Sequence[int]) -> List[dict]:

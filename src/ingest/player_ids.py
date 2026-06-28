@@ -46,7 +46,6 @@ def normalize_name(name: Optional[str]) -> str:
 @dataclass
 class CrosswalkResult:
     id_map: pd.DataFrame          # gsis_id + external IDs (-> player_id_map table)
-    bridge: pd.DataFrame          # gsis_id <-> cfb_player_id for rookies
     match_rate: float             # fraction of draftable rookies bridged to college id
 
 
@@ -96,7 +95,7 @@ def build_crosswalk() -> CrosswalkResult:
     bridge = build_college_bridge()
     bridged = bridge[bridge["cfb_player_id"].notna()] if "cfb_player_id" in bridge else bridge.iloc[0:0]
     match_rate = (len(bridged) / len(bridge)) if len(bridge) else 0.0
-    return CrosswalkResult(id_map=id_map, bridge=bridge, match_rate=match_rate)
+    return CrosswalkResult(id_map=id_map, match_rate=match_rate)
 
 
 def fantasypros_lookup(id_map: pd.DataFrame) -> Dict[str, str]:

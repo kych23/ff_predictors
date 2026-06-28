@@ -31,3 +31,6 @@ models/
 data/
 
 .agents/
+
+# live-draft save files (event log per draft)
+draft_state_*.json

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import math
 
-import numpy as np
 from scipy.stats import lognorm
 
 
@@ -50,13 +49,3 @@ def survival_probability(adp_mean: float, adp_stdev: float, next_pick: int) -> f
     sigma, scale = _lognormal_params(adp_mean, adp_stdev)
     # survival = P(pick >= next_pick) = sf evaluated just below next_pick
     return float(lognorm.sf(next_pick - 0.5, s=sigma, scale=scale))
-
-
-def survival_vector(adp_mean, adp_stdev, next_pick: int) -> np.ndarray:
-    """Vectorized survival over arrays of adp_mean / adp_stdev."""
-    adp_mean = np.asarray(adp_mean, dtype=float)
-    adp_stdev = np.asarray(adp_stdev, dtype=float)
-    out = np.empty_like(adp_mean)
-    for i in range(adp_mean.size):
-        out.flat[i] = survival_probability(adp_mean.flat[i], adp_stdev.flat[i], next_pick)
-    return out

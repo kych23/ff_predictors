@@ -43,15 +43,17 @@ def _depth_features(depth_y: pd.DataFrame) -> pd.DataFrame:
     comp = (comp_raw.rename(columns={"gsis_id": "player_id", "club_code": "team"})
             .assign(rank=lambda x: pd.to_numeric(x.get("depth_team"), errors="coerce")))
     counts = []
-    for (_, _), grp in comp.groupby(["team", "position"]):
-        ranks = grp[["player_id", "rank"]].dropna()
-        for _, r in ranks.iterrows():
-            ahead = int((ranks["rank"] < r["rank"]).sum())
-            counts.append({"player_id": r["player_id"], "same_position_competition": ahead})
+    if "team" in comp.columns and "position" in comp.columns:
+        for (_, _), grp in comp.groupby(["team", "position"]):
+            ranks = grp[["player_id", "rank"]].dropna()
+            for _, r in ranks.iterrows():
+                ahead = int((ranks["rank"] < r["rank"]).sum())
+                counts.append({"player_id": r["player_id"], "same_position_competition": ahead})
     comp_df = pd.DataFrame(counts).drop_duplicates("player_id") if counts else \
         pd.DataFrame(columns=["player_id", "same_position_competition"])
 
-    out = d[["player_id", "team", "position", "depth_chart_rank"]].copy()
+    keep = [c for c in ["player_id", "team", "position", "depth_chart_rank"] if c in d.columns]
+    out = d[keep].copy()
     out["is_projected_starter"] = (out["depth_chart_rank"] == 1).astype("Int64")
     out = out.merge(comp_df, on="player_id", how="left")
     out["has_depth_data"] = 1
@@ -135,7 +137,8 @@ def build_role_change(
     base.loc[base["team_prev"].isna() & base["team_y"].notna(), "team_changed"] = 1
 
     out = base.merge(depth.drop(columns=["team"], errors="ignore"), on="player_id", how="outer")
-    depth_team_map = dict(zip(depth["player_id"], depth["team"])) if not depth.empty else {}
+    depth_team_map = (dict(zip(depth["player_id"], depth["team"]))
+                      if not depth.empty and "team" in depth.columns else {})
     out["team"] = out["team_y"].fillna(out["player_id"].map(depth_team_map))
 
     vac = _vacated(stats_prev, rosters_y, rosters_prev)

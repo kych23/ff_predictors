@@ -67,6 +67,46 @@ def recommend(
                 scored.loc[scored["position"] == pos, "vona_score"] -= CAP_PENALTY
         scored = scored.sort_values("vona_score", ascending=False)
 
+    # --- handcuff bonus: boost same-team RB when user already has that team's RB ---
+    # A backup RB on a team where the user owns the starter is worth more than its
+    # raw VONA suggests — injury insurance on an existing asset.
+    my_rb_teams = roster.my_rb_teams()
+    if my_rb_teams and "team" in scored.columns:
+        HANDCUFF_BONUS = 1.5
+        mask = (scored["position"] == "RB") & scored["team"].isin(my_rb_teams)
+        if mask.any():
+            scored.loc[mask, "vona_score"] += HANDCUFF_BONUS
+            scored = scored.sort_values("vona_score", ascending=False)
+
+    # --- bye-week stacking penalty: discourage adding a 3rd player on the same bye ---
+    if "bye_week" in scored.columns:
+        bye_counts = roster.my_bye_week_counts()
+        BYE_PENALTY = 2.5
+        penalised = False
+        for bw, cnt in bye_counts.items():
+            if cnt >= 2:
+                bad = scored["bye_week"] == bw
+                if bad.any():
+                    scored.loc[bad, "vona_score"] -= BYE_PENALTY
+                    penalised = True
+        if penalised:
+            scored = scored.sort_values("vona_score", ascending=False)
+
+    # --- early-depth penalty: discourage backup at 1-starter positions before starters complete ---
+    # Applies to QB and TE (any position with exactly 1 pure starter slot) when:
+    #   (a) we already have one of that position, AND
+    #   (b) this pick doesn't fill a needed slot (open pure slot or eligible flex), AND
+    #   (c) there are still unfilled mandatory starter slots somewhere on the roster.
+    # Once all starters are set, no penalty — depth picks are appropriate.
+    if roster.total_unfilled_mandatory() > 0:
+        EARLY_DEPTH_PENALTY = 5.0
+        for pos in cfg.roster.modeled_positions:
+            if (cfg.roster.slots.get(pos, 0) == 1
+                    and roster.position_count(pos) >= 1
+                    and not roster.needs_starter(pos)):
+                scored.loc[scored["position"] == pos, "vona_score"] -= EARLY_DEPTH_PENALTY
+        scored = scored.sort_values("vona_score", ascending=False)
+
     # --- hard roster-completion constraint (§4.8.1) ---
     remaining = roster.remaining_picks()
     unfilled = roster.total_unfilled_mandatory()

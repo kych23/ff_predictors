@@ -42,24 +42,21 @@ def match_player_candidates(name: str, board: pd.DataFrame, *, cutoff: float = 0
     return list(board[names == close[0]]["player_id"])
 
 
-def fuzzy_match_player(name: str, board: pd.DataFrame, *, cutoff: float = 0.6) -> Optional[str]:
-    """Resolve a typed name to ONE player_id, or None if absent OR ambiguous.
-
-    Ambiguous (multiple same-name players) returns None rather than silently picking
-    one — the caller disambiguates. Use ``match_player_candidates`` to list them.
-    """
-    cands = match_player_candidates(name, board, cutoff=cutoff)
-    return cands[0] if len(cands) == 1 else None
-
-
 def adp_auto_advance(board: pd.DataFrame, drafted: set, n_picks: int) -> List[str]:
-    """Return the next ``n_picks`` expected players by ADP that are still available.
+    """Return the next ``n_picks`` expected players by ADP (fallback: P50) that are still available.
 
     Used to fast-forward opponent picks that follow ADP, so the user enters only
-    deviations.
+    deviations. When ADP is exhausted (late rounds), falls back to P50 projection
+    ordering as the best available proxy for what opponents will take.
     """
     avail = board[~board["player_id"].isin(drafted)].copy()
-    avail = avail.dropna(subset=["adp"]).sort_values("adp")
+    has_adp = avail.dropna(subset=["adp"])
+    if not has_adp.empty:
+        avail = has_adp.sort_values("adp")
+    elif "p50" in avail.columns:
+        avail = avail.dropna(subset=["p50"]).sort_values("p50", ascending=False)
+    else:
+        return []
     return list(avail.head(n_picks)["player_id"])
 
 
@@ -87,23 +84,6 @@ class ManualDraftSource(DraftStateSource):
     def candidates(self, name: str) -> List[str]:
         """All player_ids a typed name could mean (>1 = ambiguous, must disambiguate)."""
         return match_player_candidates(name, self.board)
-
-    def record_pid(self, player_id: str) -> str:
-        """Record an explicitly-chosen player_id (used after disambiguation)."""
-        self.drafted.add(player_id)
-        return player_id
-
-    def record_by_name(self, name: str) -> Optional[str]:
-        """Record only if the name resolves UNAMBIGUOUSLY; else None (caller picks)."""
-        pid = fuzzy_match_player(name, self.board)
-        if pid:
-            self.drafted.add(pid)
-        return pid
-
-    def auto_advance(self, n_picks: int) -> List[str]:
-        ids = adp_auto_advance(self.board, self.drafted, n_picks)
-        self.drafted.update(ids)
-        return ids
 
     def picks(self) -> List[str]:
         return list(self.drafted)

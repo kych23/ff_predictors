@@ -7,7 +7,6 @@ CODE PATH, not stored data.
 import datetime as dt
 import json
 
-import numpy as np
 import pandas as pd
 import pytest
 

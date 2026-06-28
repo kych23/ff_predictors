@@ -10,7 +10,6 @@ staleness warning rather than failing.
 from __future__ import annotations
 
 import datetime as dt
-import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -18,8 +17,6 @@ import pandas as pd
 
 from .http import ResilientClient
 from .player_ids import normalize_name
-
-logger = logging.getLogger(__name__)
 
 FFC_URL = "https://fantasyfootballcalculator.com/api/v1/adp/{format}"
 _CURRENT_TTL = 24 * 3600  # seconds

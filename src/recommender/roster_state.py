@@ -49,7 +49,8 @@ class RosterState:
         return len(self.drafted) + 1
 
     def my_current_round(self) -> int:
-        return len(self.my_roster) + 1
+        """Current draft round based on overall pick position (picks 1-N = round 1, etc.)."""
+        return (self.current_overall_pick() - 1) // self.cfg.teams + 1
 
     def next_my_pick(self, after_overall: Optional[int] = None) -> Optional[int]:
         """My next overall pick strictly after ``after_overall`` (default: now)."""
@@ -60,11 +61,34 @@ class RosterState:
         return None  # no next pick -> VONA survival term = 0 (§4.8.1)
 
     # --- roster mutations ---
-    def record_pick(self, player_id: str, position: Optional[str] = None, *, mine: bool = False):
+    def reset(self):
+        """Wipe all draft state to empty — used before replaying a pick history."""
+        self.drafted.clear()
+        self.my_roster.clear()
+        self.slot_fill = {s: 0 for s in self.cfg.roster.slots}
+
+    def record_pick(self, player_id: str, position: Optional[str] = None, *,
+                    mine: bool = False, team: Optional[str] = None,
+                    bye_week: Optional[int] = None):
         self.drafted.add(player_id)
         if mine:
-            self.my_roster.append({"player_id": player_id, "position": position})
+            self.my_roster.append({"player_id": player_id, "position": position,
+                                   "team": team, "bye_week": bye_week})
             self._assign_slot(position)
+
+    def my_rb_teams(self) -> set:
+        """Teams of RBs I've drafted — for handcuff detection."""
+        return {p["team"] for p in self.my_roster
+                if p.get("position") == "RB" and p.get("team")}
+
+    def my_bye_week_counts(self) -> dict:
+        """Bye week -> count of my drafted players on that bye."""
+        counts: dict = {}
+        for p in self.my_roster:
+            bw = p.get("bye_week")
+            if bw is not None:
+                counts[bw] = counts.get(bw, 0) + 1
+        return counts
 
     def _assign_slot(self, position: Optional[str]):
         """Fill the first matching slot: pure -> flex -> bench."""
