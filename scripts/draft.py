@@ -98,14 +98,17 @@ def _print_recs(recs: pd.DataFrame, names: dict) -> None:
     print(f"  Round {int(top.iloc[0]['draft_round'])}  "
           f"(risk quantile {top.iloc[0]['target_quantile']:.2f})")
     hdr_adp = f"  {'ADP':>5}" if has_adp else ""
-    print(f"   {'#':>1}  {'PLAYER':24s} {'POS':3s}  {'FIT':>6}  {'Δ#1':>6}  {'proj':>5}{hdr_adp}")
+    has_wait = "wait_term" in top.columns
+    hdr_wait = f"  {'wait':>5}" if has_wait else ""
+    print(f"   {'#':>1}  {'PLAYER':24s} {'POS':3s}  {'FIT':>6}  {'Δ#1':>6}  {'proj':>5}{hdr_adp}{hdr_wait}")
     for i, r in top.iterrows():
         gap = "  —  " if i == 0 else f"{fits[i] - best:+.2f}"
         flag = " [MUST-FILL]" if r.get("forced_completion") else ""
         adp_str = f"  {r['adp']:5.1f}" if has_adp and pd.notna(r.get("adp")) else ("   n/a" if has_adp else "")
+        wait_str = f"  {r['wait_term']:5.2f}" if has_wait else ""
         print(f"   {i+1:>1}  {names.get(r['player_id'], '?'):24s} "
               f"{r['position']:3s}  {r['vona_score']:6.2f}  {gap:>6}  "
-              f"{r['value']:5.1f}{adp_str}{flag}")
+              f"{r['value']:5.1f}{adp_str}{wait_str}{flag}")
     if len(fits) >= 2:
         gap = best - fits[1]
         rng = best - fits[-1]

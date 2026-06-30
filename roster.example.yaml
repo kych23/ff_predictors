@@ -1,0 +1,50 @@
+season: 2026
+roster:
+  - name: "Josh Allen"
+    position: QB
+    team: BUF
+    status: active
+  - name: "Saquon Barkley"
+    position: RB
+    team: PHI
+    status: active
+  - name: "Bijan Robinson"
+    position: RB
+    team: ATL
+    status: active
+  - name: "Ja'Marr Chase"
+    position: WR
+    team: CIN
+    status: active
+  - name: "CeeDee Lamb"
+    position: WR
+    team: DAL
+    status: active
+  - name: "Sam LaPorta"
+    position: TE
+    team: DET
+    status: active
+  - name: "De'Von Achane"
+    position: RB
+    team: MIA
+    status: active
+  - name: "Jaylen Waddle"
+    position: WR
+    team: MIA
+    status: active
+  - name: "Kyren Williams"
+    position: RB
+    team: LAR
+    status: active
+  - name: "Dalton Kincaid"
+    position: TE
+    team: BUF
+    status: active
+  - name: "Tyler Bass"
+    position: K
+    team: BUF
+    status: active
+  - name: "San Francisco 49ers"
+    position: DEF
+    team: SF
+    status: active

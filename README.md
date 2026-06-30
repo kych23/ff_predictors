@@ -79,12 +79,12 @@ At each of your picks it shows the **top 10** candidates with a **FIT** score an
 
 ```
   Round 1  (risk quantile 0.25)
-   #  PLAYER             POS    FIT     Δ#1   proj    ADP
-   1  Justin Jefferson   WR    2.97     —    12.4   10.1
-   2  Puka Nacua         WR    1.06   -1.91  15.3    3.0
-   3  Ja'Marr Chase      WR    0.91   -2.06  15.6    3.1
-   4  A.J. Brown         WR    0.58   -2.39  13.1   18.4
-   5  Travis Kelce       TE    0.17   -2.80   8.1   42.0
+   #  PLAYER             POS    FIT     Δ#1   proj    ADP   wait
+   1  Justin Jefferson   WR    2.97     —    12.4   10.1   0.44
+   2  Puka Nacua         WR    1.06   -1.91  15.3    3.0   0.44
+   3  Ja'Marr Chase      WR    0.91   -2.06  15.6    3.1   0.44
+   4  A.J. Brown         WR    0.58   -2.39  13.1   18.4   0.44
+   5  Travis Kelce       TE    0.17   -2.80   8.1   42.0   1.23
    ... (top 10 shown)
    read: CLEAR #1 — leads #2 by 1.91
    runs (picks 1→13, 12 picks): QB 1! | RB 4 | WR 6 | TE 2
@@ -93,6 +93,7 @@ At each of your picks it shows the **top 10** candidates with a **FIT** score an
 - **FIT** — the VONA fit-for-your-roster score (higher = better pick now).
 - **Δ#1** — gap to the top pick; small gaps across the board mean the choices are about equal.
 - **proj** — the risk-adjusted projection at this round's target quantile; **ADP** — the market's average draft position, so you can see where FIT disagrees with the market.
+- **wait** — the VONA wait term: the expected VOR of the best same-position player surviving to your next pick. Low wait = scarce position (grab now); high wait = deep position (safe to wait). Same value for all players at the same position.
 - **read** — auto-classifies the spread: _CLEAR #1_ (leads #2 by ≥1.0), _TOSS-UP_ (top 10 within 0.5 → pick your preference), or a _slight edge_ in between.
 - **runs** — how many players at each position the market expects to go before your next pick (`!` = 0–1 left, i.e. that position is running out).
 

@@ -27,12 +27,14 @@ QUANTILE_NAMES = {0.10: "p10", 0.50: "p50", 0.90: "p90"}
 
 DEFAULT_PARAMS = {
     "objective": "quantile",
-    "n_estimators": 400,
+    "n_estimators": 800,
     "learning_rate": 0.03,
     "num_leaves": 31,
     "min_child_samples": 20,
     "subsample": 0.8,
     "colsample_bytree": 0.8,
+    "reg_alpha": 0.1,
+    "reg_lambda": 1.0,
     "verbose": -1,
 }
 
@@ -51,16 +53,44 @@ class QuantileGBM:
     models: Dict[float, object] = field(default_factory=dict)
     feature_names: List[str] = field(default_factory=list)
 
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> "QuantileGBM":
+    def fit(self, X: pd.DataFrame, y: pd.Series, *,
+            X_val: pd.DataFrame | None = None,
+            y_val: pd.Series | None = None,
+            early_stopping_rounds: int = 50) -> "QuantileGBM":
         if lgb is None:
             raise ImportError("lightgbm is required to train the projection engine")
         self.feature_names = list(X.columns)
         cat = [c for c in X.columns if str(X[c].dtype) == "category"]
+
+        use_early_stop = True
+        if X_val is None or y_val is None:
+            n = len(X)
+            if n < 60:
+                use_early_stop = False
+            else:
+                # random 15% holdout for early stopping
+                rng = np.random.RandomState(42)
+                val_idx = rng.choice(n, size=max(int(n * 0.15), 10), replace=False)
+                train_idx = np.setdiff1d(np.arange(n), val_idx)
+                X_val = X.iloc[val_idx]
+                y_val = y.iloc[val_idx]
+                X = X.iloc[train_idx]
+                y = y.iloc[train_idx]
+
+        callbacks = []
+        if use_early_stop:
+            callbacks = [lgb.early_stopping(early_stopping_rounds, verbose=False),
+                         lgb.log_evaluation(period=0)]
+
         for q in self.quantiles:
             params = dict(self.params)
             params["alpha"] = q
             model = lgb.LGBMRegressor(**params)
-            model.fit(X, y, categorical_feature=cat or "auto")
+            fit_kwargs: dict = {"categorical_feature": cat or "auto"}
+            if use_early_stop:
+                fit_kwargs["eval_set"] = [(X_val, y_val)]
+                fit_kwargs["callbacks"] = callbacks
+            model.fit(X, y, **fit_kwargs)
             self.models[q] = model
         return self
 

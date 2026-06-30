@@ -43,7 +43,18 @@ def recommend(
     ``projections``: player_id, position, p10, p50, p90, adp, adp_stdev.
     """
     cfg = cfg or load_config()
-    rnd = roster.my_current_round()
+
+    cur = roster.current_overall_pick()
+    is_my_turn = cur in roster.my_picks
+    next_pick = roster.next_my_pick()
+
+    # Use the round of the user's actual pick for the risk quantile:
+    # on-turn → current pick's round; off-turn → next pick's round.
+    if is_my_turn:
+        pick_for_round = cur
+    else:
+        pick_for_round = next_pick if next_pick is not None else cur
+    rnd = (pick_for_round - 1) // roster.cfg.teams + 1
     alpha = round_to_alpha(rnd, cfg.roster.rounds)
 
     board = projections.copy()
@@ -51,8 +62,6 @@ def recommend(
     available = board[~board["player_id"].isin(roster.drafted)].copy()
     if available.empty:
         return available
-
-    next_pick = roster.next_my_pick()
     scored = score_board(available, roster, replacement, next_pick=next_pick)
 
     # --- soft positional caps: heavily discourage drafting past a position max ---
@@ -106,6 +115,17 @@ def recommend(
                     and not roster.needs_starter(pos)):
                 scored.loc[scored["position"] == pos, "vona_score"] -= EARLY_DEPTH_PENALTY
         scored = scored.sort_values("vona_score", ascending=False)
+
+    # --- K/DEF-late guard: push kickers and defenses to the final two rounds ---
+    # These positions are near-replacement-level; drafting them early wastes capital.
+    # Massive penalty keeps them off the board until round (total_rounds - 1).
+    total_rounds = cfg.roster.rounds
+    if rnd < total_rounds - 1:
+        KDEF_PENALTY = 50.0
+        kdef_mask = scored["position"].isin({"K", "DEF"})
+        if kdef_mask.any():
+            scored.loc[kdef_mask, "vona_score"] -= KDEF_PENALTY
+            scored = scored.sort_values("vona_score", ascending=False)
 
     # --- hard roster-completion constraint (§4.8.1) ---
     remaining = roster.remaining_picks()

@@ -159,6 +159,56 @@ class Adp(Base):
     __table_args__ = (Index("ix_adp_season_format", "season", "format", "teams"),)
 
 
+class WeeklyLabel(Base):
+    """Per (player, week) fantasy points scored — weekly grain of SeasonLabel."""
+
+    __tablename__ = "weekly_labels"
+
+    player_id = Column(String, primary_key=True)
+    season = Column(Integer, primary_key=True)
+    week = Column(Integer, primary_key=True)
+    position = Column(String, nullable=True)
+    team = Column(String, nullable=True)
+    fantasy_points = Column(Float, nullable=False)
+    snapshot_id = Column(String, nullable=False, index=True)
+
+    __table_args__ = (Index("ix_weekly_labels_season", "season"),)
+
+
+class WeeklyFeature(Base):
+    """Per (player, week) feature vector for the weekly projection model."""
+
+    __tablename__ = "weekly_features"
+
+    player_id = Column(String, primary_key=True)
+    season = Column(Integer, primary_key=True)
+    week = Column(Integer, primary_key=True)
+    position = Column(String, nullable=True)
+    features = Column(JSONB, nullable=False)
+    snapshot_id = Column(String, nullable=False, index=True)
+
+    __table_args__ = (Index("ix_weekly_features_season", "season"),)
+
+
+class WeeklyProjection(Base):
+    """Per (player, week) quantile projections from the weekly model."""
+
+    __tablename__ = "weekly_projections"
+
+    player_id = Column(String, primary_key=True)
+    season = Column(Integer, primary_key=True)
+    week = Column(Integer, primary_key=True)
+    model_version = Column(String, primary_key=True)
+    position = Column(String, nullable=True)
+    p10 = Column(Float, nullable=False)
+    p50 = Column(Float, nullable=False)
+    p90 = Column(Float, nullable=False)
+    snapshot_id = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (Index("ix_weekly_projections_season", "season"),)
+
+
 class IngestSnapshot(Base):
     """One row per ingest run for reproducibility (§4.0)."""
 

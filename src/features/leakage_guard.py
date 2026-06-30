@@ -44,6 +44,38 @@ def assert_no_future(df: pd.DataFrame, target_season: int, season_col: str = "se
         )
 
 
+def prior_weeks(df: pd.DataFrame, target_season: int, target_week: int,
+                season_col: str = "season", week_col: str = "week") -> pd.DataFrame:
+    """Return rows where (season < target) OR (season == target AND week < target_week).
+
+    Weekly-grain boundary filter for in-season backward-looking sources.
+    Does NOT filter by season_type — caller responsibility.
+    """
+    if df is None or df.empty or season_col not in df.columns:
+        return df
+    s = pd.to_numeric(df[season_col], errors="coerce")
+    w = pd.to_numeric(df[week_col], errors="coerce") if week_col in df.columns else pd.Series(0, index=df.index)
+    mask = (s < target_season) | ((s == target_season) & (w < target_week))
+    return df[mask].copy()
+
+
+def assert_no_future_week(df: pd.DataFrame, target_season: int, target_week: int, *,
+                          season_col: str = "season", week_col: str = "week",
+                          where: str = "") -> None:
+    """Hard assert no rows at or after the target (season, week)."""
+    if df is None or df.empty or season_col not in df.columns:
+        return
+    s = pd.to_numeric(df[season_col], errors="coerce")
+    w = pd.to_numeric(df[week_col], errors="coerce") if week_col in df.columns else pd.Series(0, index=df.index)
+    bad = (s > target_season) | ((s == target_season) & (w >= target_week))
+    if bool(bad.any()):
+        n = int(bad.sum())
+        raise LeakageError(
+            f"LEAKAGE: {n} row(s) at/after ({target_season}, week {target_week}) reached "
+            f"feature construction{(' in ' + where) if where else ''}."
+        )
+
+
 def preseason_rows(df: pd.DataFrame, target_season: int, season_col: str = "season",
                    week_col: str = "week") -> pd.DataFrame:
     """Preseason-Y artifacts (depth chart / roster): season == Y, Week-1-effective.

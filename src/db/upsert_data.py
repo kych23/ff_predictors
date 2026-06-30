@@ -23,6 +23,9 @@ from .models import (
     Projection,
     SeasonFeature,
     SeasonLabel,
+    WeeklyFeature,
+    WeeklyLabel,
+    WeeklyProjection,
     WeeklyStatsRaw,
 )
 
@@ -132,6 +135,30 @@ def upsert_adp_coverage(df: pd.DataFrame, session: Session) -> int:
     df = df.reindex(columns=cols)
     idx = [AdpCoverage.season, AdpCoverage.format, AdpCoverage.teams]
     return _upsert(df, AdpCoverage, idx, cols[3:], session)
+
+
+def upsert_weekly_labels(df: pd.DataFrame, session: Session) -> int:
+    cols = ["player_id", "season", "week", "position", "team", "fantasy_points",
+            "snapshot_id"]
+    df = df.reindex(columns=cols).dropna(subset=["player_id", "season", "week"])
+    idx = [WeeklyLabel.player_id, WeeklyLabel.season, WeeklyLabel.week]
+    return _upsert(df, WeeklyLabel, idx, ["position", "team", "fantasy_points", "snapshot_id"], session)
+
+
+def upsert_weekly_features(df: pd.DataFrame, session: Session) -> int:
+    cols = ["player_id", "season", "week", "position", "features", "snapshot_id"]
+    df = df.reindex(columns=cols).dropna(subset=["player_id", "season", "week"])
+    idx = [WeeklyFeature.player_id, WeeklyFeature.season, WeeklyFeature.week]
+    return _upsert(df, WeeklyFeature, idx, ["position", "features", "snapshot_id"], session)
+
+
+def upsert_weekly_projections(df: pd.DataFrame, session: Session) -> int:
+    cols = ["player_id", "season", "week", "model_version", "position",
+            "p10", "p50", "p90", "snapshot_id"]
+    df = df.reindex(columns=cols).dropna(subset=["player_id", "season", "week", "model_version"])
+    idx = [WeeklyProjection.player_id, WeeklyProjection.season, WeeklyProjection.week,
+           WeeklyProjection.model_version]
+    return _upsert(df, WeeklyProjection, idx, cols[4:], session)
 
 
 def upsert_ingest_snapshot(row: dict, session: Session) -> int:
