@@ -12,7 +12,7 @@ Strategy modes map to which quantile column drives the objective:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd

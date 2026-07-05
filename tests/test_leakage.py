@@ -99,3 +99,21 @@ def test_preseason_rows_week1_only():
     df = pd.DataFrame({"season": [2022, 2022, 2022], "week": [1, 2, 5], "v": [1, 2, 3]})
     out = lg.preseason_rows(df, 2022)
     assert list(out["week"]) == [1]
+
+
+def test_adp_wall_no_imports():
+    """src/projection/ and src/features/ must never import src/ingest/adp."""
+    import ast
+    from pathlib import Path
+
+    for d in [Path("src/projection"), Path("src/features")]:
+        for f in d.rglob("*.py"):
+            tree = ast.parse(f.read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    assert "ingest.adp" not in node.module, \
+                        f"ADP wall violated: {f} imports {node.module}"
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        assert "ingest.adp" not in alias.name, \
+                            f"ADP wall violated: {f} imports {alias.name}"

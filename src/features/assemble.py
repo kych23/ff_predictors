@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import LeagueConfig, load_config
-from src.db.session import SessionLocal
+from src.db.session import session_scope
 from src.db.upsert_data import upsert_season_features
 
 from . import leakage_guard as lg
@@ -179,30 +179,23 @@ def assemble_season(
     # restrict to modeled positions (K/DEF never modeled, §4.2.1)
     df = df[df["position"].isin(cfg.roster.modeled_positions)].copy()
 
-    # pack features into JSONB
+    # pack features into JSONB (vectorized: to_dict beats iterrows ~10x here)
     feat_cols = [c for c in df.columns if c not in _META_COLS]
-    records = []
-    for _, row in df.iterrows():
-        feats = {c: (None if pd.isna(row[c]) else _json_safe(row[c])) for c in feat_cols}
-        records.append({
-            "player_id": row["player_id"],
-            "season": int(Y),
-            "position": row["position"],
-            "is_rookie": bool(row["is_rookie"]),
-            "as_of_date": row["as_of_date"],
-            "features": feats,
-        })
-    return pd.DataFrame(records)
+    feature_dicts = [
+        {c: (None if pd.isna(v) else _json_safe(v)) for c, v in rec.items()}
+        for rec in df[feat_cols].to_dict(orient="records")
+    ]
+    return pd.DataFrame({
+        "player_id": df["player_id"].values,
+        "season": int(Y),
+        "position": df["position"].values,
+        "is_rookie": df["is_rookie"].astype(bool).values,
+        "as_of_date": df["as_of_date"].values,
+        "features": feature_dicts,
+    })
 
 
-def _json_safe(v):
-    if isinstance(v, (np.integer,)):
-        return int(v)
-    if isinstance(v, (np.floating,)):
-        return float(v)
-    if isinstance(v, (np.bool_,)):
-        return bool(v)
-    return v
+from ._utils import json_safe as _json_safe
 
 
 def build_features_range(
@@ -255,9 +248,8 @@ def build_features_range(
     logger.info("college features: %d rookies with real stats (of %d rookies)",
                 n_college, len(rookie_seasons))
 
-    session = SessionLocal()
     total = 0
-    try:
+    with session_scope() as session:
         for Y in seasons:
             ko = kickoffs.get(Y)
             as_of = (ko - dt.timedelta(days=cfg.backtest.as_of_offset_days)).date() \
@@ -270,9 +262,4 @@ def build_features_range(
             session.commit()
             total += n
             logger.info("season %d: %d feature rows (as_of=%s)", Y, n, as_of)
-        return total
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
+    return total

@@ -129,7 +129,7 @@ class Projection(Base):
     p50 = Column(Float, nullable=False)
     p90 = Column(Float, nullable=False)
     pos_rank = Column(Integer, nullable=True)
-    snapshot_id = Column(String, nullable=True)
+    snapshot_id = Column(String, nullable=False)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     __table_args__ = (Index("ix_projections_season", "season"),)
@@ -203,7 +203,7 @@ class WeeklyProjection(Base):
     p10 = Column(Float, nullable=False)
     p50 = Column(Float, nullable=False)
     p90 = Column(Float, nullable=False)
-    snapshot_id = Column(String, nullable=True)
+    snapshot_id = Column(String, nullable=False)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     __table_args__ = (Index("ix_weekly_projections_season", "season"),)

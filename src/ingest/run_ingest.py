@@ -19,7 +19,7 @@ import pandas as pd
 
 from src.config import load_config
 from src.db.init_db import init_db
-from src.db.session import SessionLocal
+from src.db.session import session_scope
 from src.db.upsert_data import (
     upsert_adp,
     upsert_adp_coverage,
@@ -86,7 +86,6 @@ def _weekly_raw_frame(seasons: List[int], snapshot_id: str) -> pd.DataFrame:
     if "season_type" in stats.columns:
         stats = stats[stats["season_type"] == "REG"]
     present = [c for c in SCORING_RAW_COLS if c in stats.columns]
-    records = []
     base = stats[["player_id", "season", "week"]].copy()
     base["season_type"] = "REG"
     base["team"] = stats.get("team")
@@ -112,8 +111,7 @@ def run_ingest(
     snapshot_id = _new_snapshot_id()
     init_db()
 
-    session = SessionLocal()
-    try:
+    with session_scope() as session:
         # Snapshot row first so FK-style references are valid.
         upsert_ingest_snapshot(
             {"snapshot_id": snapshot_id, "nflreadpy_version": sources.nflreadpy_version(),
@@ -180,8 +178,3 @@ def run_ingest(
         session.commit()
         logger.info("ingest complete: snapshot_id=%s", snapshot_id)
         return snapshot_id
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()

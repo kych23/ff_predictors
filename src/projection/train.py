@@ -16,7 +16,8 @@ import pandas as pd
 
 from src.config import LeagueConfig, load_config
 
-from .calibrate import IntervalCalibrator, assign_bucket
+from .calibrate import (IntervalCalibrator, assign_bucket, calibrate_oof_lofo,
+                        coverage_by_bucket)
 from .dataset import Dataset
 from .folds import make_expanding_folds
 from .quantile_model import QuantileGBM
@@ -57,8 +58,13 @@ def train_oof(ds: Dataset, *, cfg: Optional[LeagueConfig] = None,
     for fold in folds:
         tr = np.isin(season_arr, fold.train_seasons)
         te = season_arr == fold.test_season
+        # temporal validation: hold out most recent training season for early stopping
+        val_season = max(fold.train_seasons)
+        val_mask = season_arr == val_season
+        train_mask = tr & ~val_mask
         model = QuantileGBM(params=dict(params)) if params else QuantileGBM()
-        model.fit(ds.X[tr], ds.y[tr])
+        model.fit(ds.X[train_mask], ds.y[train_mask],
+                  X_val=ds.X[val_mask], y_val=ds.y[val_mask])
         preds = model.predict(ds.X[te])
         block = ds.meta[te].reset_index(drop=True).copy()
         preds = preds.reset_index(drop=True)
@@ -71,8 +77,10 @@ def train_oof(ds: Dataset, *, cfg: Optional[LeagueConfig] = None,
             if col in Xte.columns:
                 block[col] = pd.to_numeric(Xte[col], errors="coerce").to_numpy()
         pieces.append(block)
-        logger.info("fold test=%d: train rows=%d test rows=%d",
-                    fold.test_season, int(tr.sum()), int(te.sum()))
+        top = model.feature_importance().head(8)
+        logger.info("fold test=%d: train rows=%d test rows=%d | top gain: %s",
+                    fold.test_season, int(tr.sum()), int(te.sum()),
+                    ", ".join(f"{k}={v:.0f}" for k, v in top.items()))
 
     oof = pd.concat(pieces, ignore_index=True)
 
@@ -83,9 +91,13 @@ def train_oof(ds: Dataset, *, cfg: Optional[LeagueConfig] = None,
     if "team_changed" not in feat_for_bucket.columns:
         feat_for_bucket["team_changed"] = 0
     oof["bucket"] = feat_for_bucket.apply(assign_bucket, axis=1)
+    # serving calibrator: fit on ALL raw OOF residuals (applied to forward rows)
     calibrator = IntervalCalibrator(cfg.training.min_bucket_n).fit(oof)
-    oof[["p10", "p50", "p90"]] = calibrator.transform(
-        oof[["p10", "p50", "p90"]], oof["bucket"])
+    # reported OOF rows: leave-one-season-out so coverage isn't self-inflated
+    oof = calibrate_oof_lofo(oof, cfg.training.min_bucket_n)
+    for _, r in coverage_by_bucket(oof).iterrows():
+        logger.info("OOF coverage [%s]: %.3f (n=%d, nominal 0.80)",
+                    r["bucket"], r["coverage"], int(r["n"]))
 
     oof = _add_pos_rank(oof)
     return OOFResult(projections=oof, calibrator=calibrator)
@@ -137,13 +149,12 @@ def project_forward(full_model: QuantileGBM, ds_full: Dataset,
 def train_and_write(snapshot_id: Optional[str] = None, *,
                     config_path: Optional[str] = None) -> int:
     """DB path: load dataset, produce OOF + forward projections, write ``projections``."""
-    from src.db.session import SessionLocal
+    from src.db.session import session_scope
     from src.db.upsert_data import upsert_projections
     from .dataset import load_dataset
 
     cfg = load_config(config_path)
-    session = SessionLocal()
-    try:
+    with session_scope() as session:
         # OOF projections on labeled seasons (validation path).
         ds = load_dataset(session, snapshot_id, cfg=cfg, require_label=True)
         if len(ds) == 0:
@@ -190,8 +201,3 @@ def train_and_write(snapshot_id: Optional[str] = None, *,
         session.commit()
         logger.info("projections total: %d (model_version=%s)", n, cfg.model_version)
         return n
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()

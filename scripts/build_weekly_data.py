@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import pathlib
 import sys
 
-sys.path.insert(0, ".")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from src.db.init_db import init_db
+from src.db.session import resolve_snapshot
 from src.features.weekly_assemble import build_weekly_features_range
 from src.labels.build_labels import build_weekly_labels
 
@@ -30,13 +33,16 @@ def main():
     ap.add_argument("--snapshot-id", type=str, default=None)
     args = ap.parse_args()
 
+    init_db()
+    sid = resolve_snapshot(args.snapshot_id)
+
     logger.info("building weekly labels...")
-    n_labels = build_weekly_labels(snapshot_id=args.snapshot_id)
+    n_labels = build_weekly_labels(snapshot_id=sid)
     logger.info("weekly_labels: %d rows", n_labels)
 
     logger.info("building weekly features for %d..%d...", args.start, args.end)
     n_feats = build_weekly_features_range(args.start, args.end,
-                                          snapshot_id=args.snapshot_id)
+                                          snapshot_id=sid)
     logger.info("weekly_features: %d rows", n_feats)
     logger.info("done.")
 

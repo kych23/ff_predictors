@@ -4,6 +4,7 @@ Asserts a minimum match rate AND that unmatched rookies still produce valid rows
 via the NaN + has_college_stats=0 fallback (no silent bad rows, no drops).
 """
 import pandas as pd
+import pytest
 
 from src.features.rookies import build_rookie_features, UDFA_SYNTHETIC_PICK
 from src.ingest.player_ids import normalize_name
@@ -17,9 +18,15 @@ def test_name_normalization():
 
 
 def test_draft_bridge_match_rate_real_data():
-    """The draft_picks bridge should resolve a healthy fraction to cfb ids."""
+    """The draft_picks bridge should resolve a healthy fraction to cfb ids.
+
+    Downloads nflverse data; skips (rather than fails) when the network is down.
+    """
     from src.ingest.player_ids import build_crosswalk
-    cw = build_crosswalk()
+    try:
+        cw = build_crosswalk()
+    except Exception as exc:
+        pytest.skip(f"nflverse download unavailable: {exc}")
     assert cw.match_rate >= 0.5  # most modern draft picks carry a cfb_player_id
     assert len(cw.id_map) > 1000
 

@@ -14,7 +14,7 @@ import pandas as pd
 
 from src.config import LeagueConfig, load_config
 from src.db.models import Projection, WeeklyLabel
-from src.db.session import SessionLocal
+from src.db.session import session_scope
 from src.db.upsert_data import upsert_weekly_features
 
 from . import leakage_guard as lg
@@ -29,14 +29,7 @@ logger = logging.getLogger(__name__)
 _META_COLS = {"player_id", "season", "week", "position"}
 
 
-def _json_safe(v):
-    if isinstance(v, (np.integer,)):
-        return int(v)
-    if isinstance(v, (np.floating,)):
-        return float(v)
-    if isinstance(v, (np.bool_,)):
-        return bool(v)
-    return v
+from ._utils import json_safe as _json_safe
 
 
 def assemble_weekly_features(target_season: int, target_week: int,
@@ -113,6 +106,7 @@ def assemble_weekly_features(target_season: int, target_week: int,
         ].copy()
 
     universe["player_id"] = universe["player_id"].astype(str)
+    universe = universe.drop_duplicates("player_id", keep="last")
     universe = universe[universe["team"].isin(teams_playing)].copy()
     if universe.empty:
         return pd.DataFrame()
@@ -166,29 +160,24 @@ def assemble_weekly_features(target_season: int, target_week: int,
                    "rolling_carries_pg"]:
             df[c] = np.nan
 
-    # 8. PACK FEATURES
+    # 8. PACK FEATURES — dedup by player_id (merges can re-introduce dupes)
+    df = df.drop_duplicates("player_id", keep="first")
     feat_cols = [c for c in df.columns if c not in _META_COLS
                  and c not in {"team", "opponent", "season_p50"}]
     feat_cols = list(set(feat_cols) | {"season_p50"})
 
-    records = []
-    for _, row in df.iterrows():
-        feats = {}
-        for c in feat_cols:
-            v = row.get(c)
-            if pd.isna(v) if isinstance(v, float) else v is None:
-                feats[c] = None
-            else:
-                feats[c] = _json_safe(v)
-        records.append({
-            "player_id": row["player_id"],
-            "season": int(target_season),
-            "week": int(target_week),
-            "position": row["position"],
-            "features": feats,
-            "snapshot_id": snapshot_id or "latest",
-        })
-    return pd.DataFrame(records)
+    feature_dicts = [
+        {c: (None if pd.isna(v) else _json_safe(v)) for c, v in rec.items()}
+        for rec in df[feat_cols].to_dict(orient="records")
+    ]
+    return pd.DataFrame({
+        "player_id": df["player_id"].values,
+        "season": int(target_season),
+        "week": int(target_week),
+        "position": df["position"].values,
+        "features": feature_dicts,
+        "snapshot_id": snapshot_id or "latest",
+    })
 
 
 def build_weekly_features_range(start_season: int, end_season: int, *,
@@ -200,7 +189,8 @@ def build_weekly_features_range(start_season: int, end_season: int, *,
     from src.ingest.player_ids import build_id_map
 
     seasons = list(range(start_season, end_season + 1))
-    load_seasons = list(range(start_season - 1, end_season + 1))
+    # two prior seasons so players who missed a full year still have rolling stats
+    load_seasons = list(range(start_season - 2, end_season + 1))
 
     logger.info("loading nflreadpy sources for %d..%d", load_seasons[0], load_seasons[-1])
     player_stats = sources.load_player_stats(load_seasons)
@@ -211,8 +201,7 @@ def build_weekly_features_range(start_season: int, end_season: int, *,
     id_map = build_id_map()
     pfr_to_gsis = dict(zip(id_map["pfr_id"].astype("string"), id_map["gsis_id"].astype(str)))
 
-    session = SessionLocal()
-    try:
+    with session_scope() as session:
         wl_rows = session.execute(select(WeeklyLabel)).scalars().all()
         weekly_labels = pd.DataFrame([
             {"player_id": r.player_id, "season": r.season, "week": r.week,
@@ -266,8 +255,3 @@ def build_weekly_features_range(start_season: int, end_season: int, *,
 
         logger.info("weekly_features total: %d rows", total)
         return total
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()

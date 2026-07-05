@@ -25,52 +25,33 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import select
 
-from src.benchmark.draft_sim import optimal_lineup_value, simulate_draft
+from src.benchmark.draft_sim import optimal_lineup, optimal_lineup_value, simulate_draft
 from src.config import load_config
-from src.db.models import Adp, Player, Projection, SeasonLabel
-from src.db.session import SessionLocal
+from src.db.loaders import (load_adp_df, load_player_names, load_projections_df,
+                            load_season_labels_df)
+from src.db.models import Adp
+from src.db.session import session_scope
 from src.recommender.recommend import build_replacement_from_projections
 
 
 def _load(season: int, cfg):
-    session = SessionLocal()
-    try:
-        proj = pd.DataFrame([
-            {"player_id": r.player_id, "position": r.position,
-             "p10": r.p10, "p50": r.p50, "p90": r.p90}
-            for r in session.execute(
-                select(Projection).where(Projection.season == season)).scalars()
-        ])
-        adp = pd.DataFrame([
-            {"player_id": r.player_id, "adp": r.adp, "adp_stdev": r.adp_stdev,
-             "position": r.position}
-            for r in session.execute(
-                select(Adp).where(Adp.season == season,
-                                  Adp.format == cfg.adp.format,
-                                  Adp.teams == cfg.adp.teams)).scalars()
-        ])
-        labels = pd.DataFrame([
-            {"player_id": r.player_id, "fppg": r.fppg}
-            for r in session.execute(
-                select(SeasonLabel).where(SeasonLabel.season == season)).scalars()
-        ])
-        names = {r.player_id: r.name
-                 for r in session.execute(select(Player)).scalars()}
-    finally:
-        session.close()
+    with session_scope() as session:
+        proj = load_projections_df(session, season)[
+            ["player_id", "position", "p10", "p50", "p90"]]
+        adp = load_adp_df(session, cfg, season)[
+            ["player_id", "adp", "adp_stdev", "position"]]
+        labels = load_season_labels_df(session, season)[["player_id", "fppg"]]
+        names = load_player_names(session)
     return proj, adp, labels, names
 
 
 def _seasons_with_adp(cfg) -> list:
     """Seasons that actually have ADP rows for this league's format/teams (for hints)."""
-    session = SessionLocal()
-    try:
+    with session_scope() as session:
         rows = session.execute(
             select(Adp.season).where(Adp.format == cfg.adp.format,
                                      Adp.teams == cfg.adp.teams).distinct()
         ).scalars().all()
-    finally:
-        session.close()
     return sorted(set(rows))
 
 
@@ -81,38 +62,6 @@ def _build_board(proj: pd.DataFrame, adp: pd.DataFrame) -> pd.DataFrame:
     proj_pos = dict(zip(proj["player_id"], proj["position"]))
     board["position"] = board["player_id"].map(proj_pos).fillna(board["position"])
     return board
-
-
-def _best_lineup(roster_ids, pos_map, fppg_map, cfg):
-    """Best legal starting lineup by ACTUAL fppg. Returns (rows, total).
-
-    rows: list of (slot_label, player_id, fppg). Mirrors optimal_lineup_value's
-    selection so the printed lineup matches the scored total exactly.
-    """
-    by_pos: dict = {}
-    for pid in roster_ids:
-        pos = pos_map.get(pid)
-        if pos in cfg.roster.modeled_positions:
-            by_pos.setdefault(pos, []).append((pid, fppg_map.get(pid, 0.0)))
-    for pos in by_pos:
-        by_pos[pos].sort(key=lambda t: t[1], reverse=True)
-
-    rows = []
-    used = {pos: 0 for pos in cfg.roster.modeled_positions}
-    for pos in cfg.roster.modeled_positions:
-        need = cfg.roster.slots.get(pos, 0)
-        for pid, val in by_pos.get(pos, [])[:need]:
-            rows.append((pos, pid, val))
-        used[pos] = min(need, len(by_pos.get(pos, [])))
-    # flex from leftovers among flex-eligible positions
-    leftovers = []
-    for pos in cfg.roster.flex_eligible:
-        leftovers += by_pos.get(pos, [])[used[pos]:]
-    leftovers.sort(key=lambda t: t[1], reverse=True)
-    for pid, val in leftovers[:cfg.roster.slots.get("FLEX", 0)]:
-        rows.append(("FLEX", pid, val))
-    total = sum(v for _, _, v in rows)
-    return rows, total
 
 
 def _draft_one(board, cfg, slot, replacement, pos_map, fppg_map):
@@ -140,7 +89,7 @@ def _run_single(board, cfg, slot, replacement, pos_map, fppg_map, names, season)
         act_str = f"{actual:5.1f}" if actual is not None else "  —  "
         print(f"   R{rnd:<2} {names.get(pid, pid):24s} {pos:3s}  {proj_str} -> {act_str}")
 
-    rows, total = _best_lineup(my_ids, pos_map, fppg_map, cfg)
+    rows, total = optimal_lineup(my_ids, pos_map, fppg_map, cfg)
     print(f"\n  best legal starting lineup (by actual {season} FPPG):")
     for slot_label, pid, val in rows:
         print(f"   {slot_label:4s} {names.get(pid, pid):24s} {val:5.1f}")

@@ -75,7 +75,7 @@ def build_matrix(
     meta = df[["player_id", "season", "position", "is_rookie"]].copy()
     y = df[TARGET] if TARGET in df.columns else pd.Series(index=df.index, dtype=float)
 
-    drop = META_COLS | {TARGET, "is_rookie"}
+    drop = (META_COLS - {"position"}) | {TARGET, "is_rookie"}
     feature_names = [c for c in df.columns if c not in drop]
     X = df[feature_names].copy()
 

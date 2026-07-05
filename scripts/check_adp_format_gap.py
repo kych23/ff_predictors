@@ -24,7 +24,7 @@ from src.labels.scoring import score_dataframe
 
 # Generic full-PPR scoring (what public ADP implicitly reflects): note int = -2.
 GENERIC_PPR = ScoringConfig(
-    pass_yd=0.04, pass_td=4, int=-2, rush_yd=0.1, rush_td=6,
+    pass_yd=0.04, pass_td=4, interception=-2, rush_yd=0.1, rush_td=6,
     rec=1, rec_yd=0.1, rec_td=6, two_pt=2, fumble_lost=-2, return_td=6,
 )
 

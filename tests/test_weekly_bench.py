@@ -108,6 +108,27 @@ def test_run_weekly_benchmark_empty():
     assert np.isnan(result.mean_pts_left)
 
 
+def test_multi_slot_averages_over_draft_positions():
+    """With a large pool, different draft slots get different rosters; the
+    week metric is the average over slots, not a single team's number."""
+    import itertools
+    rng_vals = itertools.count(1)
+    players = []
+    for pos, count in [("QB", 24), ("RB", 60), ("WR", 60), ("TE", 24),
+                       ("K", 12), ("DEF", 12)]:
+        for i in range(count):
+            players.append((f"{pos.lower()}{i}", pos, 30.0 - (i * 0.4)))
+    proj = _make_projections(players)
+    act = _make_actuals([(pid, p50) for pid, _, p50 in players])
+
+    per_slot = [bench_one_week(proj, act, team_slots=(s,)) for s in (0, 5, 11)]
+    avg = bench_one_week(proj, act, team_slots=(0, 5, 11))
+    expected = sum(r["pts_left_on_bench"] for r in per_slot) / 3
+    assert abs(avg["pts_left_on_bench"] - expected) < 1e-9
+    # early slot drafts a stronger roster than the late slot
+    assert per_slot[0]["optimal_total"] >= per_slot[2]["optimal_total"]
+
+
 def test_hit_rate_below_one_when_wrong():
     """Hit rate < 1 when model picks wrong starters."""
     players = [

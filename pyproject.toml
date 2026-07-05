@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# make `venv/bin/pytest` work standalone: put the repo root on sys.path so
+# `from src...` imports resolve without `python -m pytest`
+pythonpath = ["."]
+testpaths = ["tests"]

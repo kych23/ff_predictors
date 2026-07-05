@@ -138,7 +138,8 @@ def _load_dvp_ranks(session, season: int, week: int) -> dict:
             for rank, (pid, _) in enumerate(entries, 1):
                 ranks[pid] = rank
         return ranks
-    except Exception:
+    except Exception as exc:
+        print(f"warning: DvP ranks unavailable ({exc})", file=sys.stderr)
         return {}
 
 
@@ -158,7 +159,8 @@ def _load_schedules_for_week(season: int, week: int) -> dict:
             opp_map[h] = f"vs {a}"
             opp_map[a] = f"@ {h}"
         return opp_map
-    except Exception:
+    except Exception as exc:
+        print(f"warning: schedule/opponent info unavailable ({exc})", file=sys.stderr)
         return {}
 
 

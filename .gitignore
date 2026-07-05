@@ -22,8 +22,6 @@ venv/
 .DS_Store
 Thumbs.db
 
-notes.md
-
 # Models and Data
 models/
 *.pkl
@@ -39,3 +37,5 @@ CLAUDE.md
 draft_state_*.json
 
 DrafterSpec.md
+
+notes/

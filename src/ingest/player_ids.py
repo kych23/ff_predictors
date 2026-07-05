@@ -29,13 +29,20 @@ _NICKNAMES = {
 }
 
 
-def normalize_name(name: Optional[str]) -> str:
-    """Lowercase, strip accents/punctuation/suffixes; normalize the first-name nickname."""
+def ascii_fold(name: Optional[str]) -> str:
+    """Lowercase ASCII fold: strip accents and replace non-alpha with spaces.
+
+    Shared base step for player-name and college-name normalization.
+    """
     if not name or (isinstance(name, float) and pd.isna(name)):
         return ""
     s = unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode()
-    s = s.lower()
-    s = re.sub(r"[^a-z ]", " ", s)
+    return re.sub(r"[^a-z ]", " ", s.lower())
+
+
+def normalize_name(name: Optional[str]) -> str:
+    """Lowercase, strip accents/punctuation/suffixes; normalize the first-name nickname."""
+    s = ascii_fold(name)
     parts = [p for p in s.split() if p and p not in _SUFFIXES]
     if not parts:
         return ""

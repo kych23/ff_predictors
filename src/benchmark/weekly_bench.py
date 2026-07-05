@@ -33,20 +33,90 @@ class WeeklyBenchResult:
     n_weeks: int
 
 
+ROSTER_DEPTH = {"QB": 2, "RB": 5, "WR": 5, "TE": 2}
+
+# Evaluate early / mid / late draft slots and average, so the headline metric
+# isn't conditioned on a single draft position.
+BENCH_TEAM_SLOTS = (0, 5, 11)
+
+
+def _simulate_roster(df: pd.DataFrame, n_teams: int = 12,
+                     team_idx: int = 5) -> pd.DataFrame:
+    """Simulate one team's roster via round-robin draft from the player pool.
+
+    Ranks players per position by P50, assigns them to ``n_teams`` teams
+    round-robin (snake-style), and returns the roster for ``team_idx``.
+    Produces a realistic mid-pack roster instead of all-stars.
+    Skips filtering when pool is too small for meaningful draft simulation.
+    """
+    total_depth = sum(ROSTER_DEPTH.values())
+    if len(df) <= total_depth * 2:
+        return df
+
+    pieces = []
+    for pos, depth in ROSTER_DEPTH.items():
+        pos_pool = df[df["position"] == pos].sort_values("p50", ascending=False)
+        total_slots = depth * n_teams
+        pos_pool = pos_pool.head(total_slots).reset_index(drop=True)
+        team_assignments = []
+        for i in range(len(pos_pool)):
+            rnd = i // n_teams
+            pick_in_round = i % n_teams
+            team = pick_in_round if rnd % 2 == 0 else (n_teams - 1 - pick_in_round)
+            team_assignments.append(team)
+        pos_pool["_team"] = team_assignments
+        pieces.append(pos_pool[pos_pool["_team"] == team_idx].drop(columns=["_team"]))
+    other = df[~df["position"].isin(ROSTER_DEPTH)]
+    if not other.empty:
+        pieces.append(other.head(2))
+    return pd.concat(pieces, ignore_index=True) if pieces else df
+
+
+def _bench_one_roster(roster: pd.DataFrame, cfg: LeagueConfig,
+                      strategy: str) -> dict:
+    """Recommended vs hindsight-optimal lineup for ONE simulated roster."""
+    rec_result = optimize_lineup(roster, cfg=cfg, strategy=strategy)
+    rec_starter_ids = set(rec_result.starters["player_id"])
+    rec_actual_total = float(
+        roster[roster["player_id"].isin(rec_starter_ids)]["fantasy_points"].sum()
+    )
+
+    # Hindsight-optimal: optimize on actual fantasy_points
+    hindsight = roster.copy()
+    hindsight["p10"] = hindsight["fantasy_points"]
+    hindsight["p50"] = hindsight["fantasy_points"]
+    hindsight["p90"] = hindsight["fantasy_points"]
+    opt_result = optimize_lineup(hindsight, cfg=cfg, strategy="balanced")
+    opt_starter_ids = set(opt_result.starters["player_id"])
+    opt_total = float(
+        roster[roster["player_id"].isin(opt_starter_ids)]["fantasy_points"].sum()
+    )
+
+    return {
+        "recommended_total": rec_actual_total,
+        "optimal_total": opt_total,
+        "pts_left_on_bench": opt_total - rec_actual_total,
+        "n_starters": len(rec_starter_ids),
+        "n_correct": len(rec_starter_ids & opt_starter_ids),
+    }
+
+
 def bench_one_week(
     projections: pd.DataFrame,
     actuals: pd.DataFrame,
     *,
     cfg: Optional[LeagueConfig] = None,
     strategy: str = "balanced",
+    team_slots: tuple = BENCH_TEAM_SLOTS,
 ) -> dict:
     """Benchmark one week: recommended vs hindsight-optimal lineup.
 
     `projections`: player_id, position, p10, p50, p90
     `actuals`: player_id, fantasy_points (actual weekly score)
 
-    Returns dict with recommended_total, optimal_total, pts_left_on_bench,
-    n_starters, n_correct (starters matching hindsight-optimal).
+    Simulates one roster per draft slot in ``team_slots`` and averages the
+    totals (sums starter counts), so the metric reflects early/mid/late
+    draft positions rather than being conditioned on a single slot.
     """
     cfg = cfg or load_config()
 
@@ -56,34 +126,17 @@ def bench_one_week(
         return {"recommended_total": 0, "optimal_total": 0,
                 "pts_left_on_bench": 0, "n_starters": 0, "n_correct": 0}
 
-    # Recommended lineup: optimize on projections
-    rec_result = optimize_lineup(merged, cfg=cfg, strategy=strategy)
-    rec_starter_ids = set(rec_result.starters["player_id"])
-
-    # Score recommended starters by actuals
-    rec_actual_total = float(
-        merged[merged["player_id"].isin(rec_starter_ids)]["fantasy_points"].sum()
-    )
-
-    # Hindsight-optimal: optimize on actual fantasy_points
-    hindsight = merged.copy()
-    hindsight["p10"] = hindsight["fantasy_points"]
-    hindsight["p50"] = hindsight["fantasy_points"]
-    hindsight["p90"] = hindsight["fantasy_points"]
-    opt_result = optimize_lineup(hindsight, cfg=cfg, strategy="balanced")
-    opt_starter_ids = set(opt_result.starters["player_id"])
-    opt_total = float(
-        merged[merged["player_id"].isin(opt_starter_ids)]["fantasy_points"].sum()
-    )
-
-    n_correct = len(rec_starter_ids & opt_starter_ids)
-
+    per_slot = [
+        _bench_one_roster(_simulate_roster(merged, team_idx=slot), cfg, strategy)
+        for slot in team_slots
+    ]
+    k = len(per_slot)
     return {
-        "recommended_total": rec_actual_total,
-        "optimal_total": opt_total,
-        "pts_left_on_bench": opt_total - rec_actual_total,
-        "n_starters": len(rec_starter_ids),
-        "n_correct": n_correct,
+        "recommended_total": sum(r["recommended_total"] for r in per_slot) / k,
+        "optimal_total": sum(r["optimal_total"] for r in per_slot) / k,
+        "pts_left_on_bench": sum(r["pts_left_on_bench"] for r in per_slot) / k,
+        "n_starters": sum(r["n_starters"] for r in per_slot),
+        "n_correct": sum(r["n_correct"] for r in per_slot),
     }
 
 

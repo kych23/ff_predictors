@@ -54,8 +54,8 @@ def _season_aggregates(stats: pd.DataFrame, pfr_to_gsis: Optional[Dict[str, str]
         pass_tds=("passing_tds", "sum"),
         ints=("passing_interceptions", "sum"),
         sacks=("sacks_suffered", "sum"),
-        target_share=("target_share", "mean") if "target_share" in df.columns else ("targets", "size"),
-        air_yards_share=("air_yards_share", "mean") if "air_yards_share" in df.columns else ("targets", "size"),
+        target_share=("target_share", "mean") if "target_share" in df.columns else ("targets", lambda x: np.nan),
+        air_yards_share=("air_yards_share", "mean") if "air_yards_share" in df.columns else ("targets", lambda x: np.nan),
     ).reset_index()
 
     gp = agg["games"].clip(lower=1)
@@ -151,7 +151,18 @@ def build_prior_production(
 
     Inputs must already be filtered to seasons < ``target_season`` (caller uses
     ``leakage_guard.prior_seasons``). Most recent seasons get the highest weight.
+    Re-filters defensively: target-season or future rows slipping past the
+    caller would be an in-season leak, so they are dropped here too.
     """
+    def _strictly_prior(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+        if df is None or df.empty or "season" not in df.columns:
+            return df
+        season = pd.to_numeric(df["season"], errors="coerce")
+        return df[season < target_season]
+
+    stats_prior = _strictly_prior(stats_prior)
+    snaps_prior = _strictly_prior(snaps_prior)
+    opp_prior = _strictly_prior(opp_prior)
     agg = _season_aggregates(stats_prior, pfr_to_gsis, snaps_prior, opp_prior)
     if agg.empty:
         return pd.DataFrame(columns=["player_id", *(f"prior_{c}" for c in RATE_FEATURES)])

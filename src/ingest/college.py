@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import unicodedata
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -48,11 +47,8 @@ _COLLEGE_ABBREV = {
 
 def _normalize_college(name: Optional[str]) -> str:
     """Lowercase, strip accents/punctuation/filler; expand known abbreviations."""
-    if not name or (isinstance(name, float) and pd.isna(name)):
-        return ""
-    s = unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode()
-    s = s.lower()
-    s = re.sub(r"[^a-z ]", " ", s)
+    from .player_ids import ascii_fold
+    s = ascii_fold(name)
     s = re.sub(r"\b(university|college|the|of|at|a&m)\b", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return _COLLEGE_ABBREV.get(s, s)

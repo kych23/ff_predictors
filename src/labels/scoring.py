@@ -48,13 +48,15 @@ def score_dataframe(df: pd.DataFrame, scoring: ScoringConfig | None = None) -> p
     """Fantasy points per row from raw component columns (vectorized)."""
     if scoring is None:
         scoring = load_config().scoring
-    if df.empty:
+    # row count, not df.empty: a frame with rows but no stat columns (e.g. an
+    # all-empty stat line) must score 0 per row, not vanish.
+    if len(df) == 0:
         return pd.Series(dtype=float)
 
     pts = (
         _col(df, "passing_yards") * scoring.pass_yd
         + _col(df, "passing_tds") * scoring.pass_td
-        + _col(df, "passing_interceptions") * scoring.int
+        + _col(df, "passing_interceptions") * scoring.interception
         + _col(df, "rushing_yards") * scoring.rush_yd
         + _col(df, "rushing_tds") * scoring.rush_td
         + _col(df, "receptions") * scoring.rec

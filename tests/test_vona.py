@@ -54,6 +54,40 @@ def test_no_double_count_fixed_replacement():
     assert marginal_value(18, "WR", rep, state) == 13.0
 
 
+def test_empty_board_returns_empty():
+    cfg = load_config()
+    state = RosterState(cfg=cfg, draft_position=1)
+    board = pd.DataFrame(columns=["player_id", "position", "value", "adp", "adp_stdev"])
+    scored = score_board(board, state, _replacement(), next_pick=30)
+    assert scored.empty
+    assert "vona_score" in scored.columns
+
+
+def test_all_below_replacement_bench_floor_zero():
+    """Players below replacement with no open starter slot contribute 0 marginal,
+    never negative bench value."""
+    cfg = load_config()
+    state = RosterState(cfg=cfg, draft_position=1)
+    for slot, n in cfg.roster.slots.items():
+        state.slot_fill[slot] = n  # every slot filled -> bench-only
+    assert marginal_value(2.0, "RB", _replacement(), state) == 0.0
+
+
+def test_nan_adp_stdev_does_not_crash():
+    import numpy as np
+    cfg = load_config()
+    state = RosterState(cfg=cfg, draft_position=1)
+    board = pd.DataFrame([
+        {"player_id": "A", "position": "RB", "value": 20, "adp": 10,
+         "adp_stdev": np.nan},
+        {"player_id": "B", "position": "RB", "value": 15, "adp": 40,
+         "adp_stdev": np.nan},
+    ])
+    scored = score_board(board, state, _replacement(), next_pick=30)
+    assert len(scored) == 2
+    assert scored["vona_score"].notna().all()
+
+
 def test_roster_completion_hard_constraint():
     cfg = load_config()
     state = RosterState(cfg=cfg, draft_position=1)

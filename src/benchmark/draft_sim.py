@@ -111,38 +111,41 @@ def _our_pick(proj_board: pd.DataFrame, full_board: pd.DataFrame, state: RosterS
     return avail.iloc[0]["player_id"] if not avail.empty else None
 
 
-def optimal_lineup_value(roster_ids: List[str], pos_map: Dict[str, str],
-                         fppg_map: Dict[str, float], cfg: LeagueConfig) -> float:
-    """Availability-neutral starting-lineup value: best actual-FPPG legal lineup.
+def optimal_lineup(roster_ids: List[str], pos_map: Dict[str, str],
+                   fppg_map: Dict[str, float], cfg: LeagueConfig) -> tuple:
+    """Best legal starting lineup by actual FPPG: (rows, total).
 
+    rows = [(slot_label, player_id, fppg), ...] — pure starters greedily by
+    position, then FLEX from the best leftover flex-eligible player.
     K/DEF contribute a constant 0 (unmodeled, identical across teams -> cancels).
     """
-    players = [(pid, pos_map.get(pid), fppg_map.get(pid, 0.0)) for pid in roster_ids]
-    # only modeled positions score; sort each position desc by actual fppg
-    by_pos: Dict[str, List[float]] = {}
-    for pid, pos, val in players:
+    by_pos: Dict[str, List[tuple]] = {}
+    for pid in roster_ids:
+        pos = pos_map.get(pid)
         if pos in cfg.roster.modeled_positions:
-            by_pos.setdefault(pos, []).append(val)
+            by_pos.setdefault(pos, []).append((pid, fppg_map.get(pid, 0.0)))
     for pos in by_pos:
-        by_pos[pos].sort(reverse=True)
+        by_pos[pos].sort(key=lambda t: t[1], reverse=True)
 
-    total = 0.0
+    rows = []
     used = {pos: 0 for pos in cfg.roster.modeled_positions}
-    # pure starters
     for pos in cfg.roster.modeled_positions:
         need = cfg.roster.slots.get(pos, 0)
-        avail = by_pos.get(pos, [])
-        take = min(need, len(avail))
-        total += sum(avail[:take])
-        used[pos] = take
-    # flex from leftover flex-eligible
-    flex_need = cfg.roster.slots.get("FLEX", 0)
+        take = by_pos.get(pos, [])[:need]
+        rows += [(pos, pid, val) for pid, val in take]
+        used[pos] = len(take)
     leftovers = []
     for pos in cfg.roster.flex_eligible:
         leftovers += by_pos.get(pos, [])[used[pos]:]
-    leftovers.sort(reverse=True)
-    total += sum(leftovers[:flex_need])
-    return total
+    leftovers.sort(key=lambda t: t[1], reverse=True)
+    rows += [("FLEX", pid, val) for pid, val in leftovers[:cfg.roster.slots.get("FLEX", 0)]]
+    return rows, sum(v for _, _, v in rows)
+
+
+def optimal_lineup_value(roster_ids: List[str], pos_map: Dict[str, str],
+                         fppg_map: Dict[str, float], cfg: LeagueConfig) -> float:
+    """Availability-neutral starting-lineup value (total only)."""
+    return optimal_lineup(roster_ids, pos_map, fppg_map, cfg)[1]
 
 
 @dataclass

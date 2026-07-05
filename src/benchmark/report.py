@@ -22,6 +22,13 @@ except ImportError:  # pragma: no cover
 
 DATA_COMPLETE_ERA_START = 2016
 
+# Exact two-sided sign/Wilcoxon tests cannot reach p < 0.05 below n = 6
+# (minimum achievable p = 2 * 0.5^n): running them there makes the gate
+# mathematically impossible to pass, silently. Below that we gate on the
+# bootstrap CI alone and say so; below MIN_N_FOR_GATE nothing can pass.
+MIN_N_FOR_P_TESTS = 6
+MIN_N_FOR_GATE = 5
+
 
 @dataclass
 class PairedTest:
@@ -34,10 +41,16 @@ class PairedTest:
 
     @property
     def significant(self) -> bool:
-        """Pass = positive mean diff, p < 0.05, and bootstrap CI excludes 0 (§4.7.1)."""
+        """PASS = positive mean diff, bootstrap CI excludes 0, and — when a
+        powered p-test exists (n >= MIN_N_FOR_P_TESTS) — p < 0.05 (§4.7.1)."""
+        if self.n < MIN_N_FOR_GATE:
+            return False
+        if not (self.mean_diff > 0 and self.ci_low > 0):
+            return False
         p = self.wilcoxon_p if self.wilcoxon_p is not None else self.sign_test_p
-        return (self.mean_diff > 0 and p is not None and p < 0.05
-                and self.ci_low > 0)
+        if p is not None:
+            return p < 0.05
+        return True
 
 
 def _sign_test_p(diffs: np.ndarray) -> Optional[float]:
@@ -70,14 +83,17 @@ def paired_test(engine: Sequence[float], baseline: Sequence[float]) -> PairedTes
     diffs = diffs[mask]
     n = diffs.size
     wp = None
-    if wilcoxon is not None and n >= 1 and np.any(diffs != 0):
-        try:
-            wp = float(wilcoxon(diffs).pvalue)
-        except ValueError:
-            wp = None
+    sp = None
+    if n >= MIN_N_FOR_P_TESTS:
+        if wilcoxon is not None and np.any(diffs != 0):
+            try:
+                wp = float(wilcoxon(diffs).pvalue)
+            except ValueError:
+                wp = None
+        sp = _sign_test_p(diffs)
     lo, hi = bootstrap_ci(diffs)
     return PairedTest(n=n, mean_diff=float(np.mean(diffs)) if n else float("nan"),
-                      wilcoxon_p=wp, sign_test_p=_sign_test_p(diffs),
+                      wilcoxon_p=wp, sign_test_p=sp,
                       ci_low=lo, ci_high=hi)
 
 
@@ -90,6 +106,11 @@ def format_gate(name: str, test: PairedTest, ceiling_note: bool = True) -> str:
         f"  bootstrap 95% CI = [{test.ci_low:+.4f}, {test.ci_high:+.4f}]",
         f"  GATE {'PASS' if test.significant else 'FAIL'}",
     ]
+    if test.n < MIN_N_FOR_GATE:
+        lines.append(f"  note: n < {MIN_N_FOR_GATE} — too few seasons for any gate to pass.")
+    elif test.n < MIN_N_FOR_P_TESTS:
+        lines.append(f"  note: n < {MIN_N_FOR_P_TESTS} — exact p-tests are unpowered "
+                     "at 0.05; gate uses the bootstrap CI only.")
     if ceiling_note:
         lines.append("  note: ~8-9 evaluable seasons is the honest ceiling, not 'many'.")
     return "\n".join(lines)

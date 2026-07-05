@@ -32,3 +32,35 @@ def test_trained_model_quantiles_monotonic():
     preds = model.predict(X)
     assert (preds["p10"] <= preds["p50"]).all()
     assert (preds["p50"] <= preds["p90"]).all()
+
+
+def test_early_stopping_refits_at_best_iteration():
+    """ES holdout tunes n_trees, then the model is refit on train+holdout:
+    tree count stays below the ceiling and the fit uses all rows."""
+    rng = np.random.default_rng(1)
+    n = 500
+    X = pd.DataFrame({"a": rng.normal(size=n), "b": rng.normal(size=n)})
+    y = pd.Series(2 * X["a"] - X["b"] + rng.normal(scale=0.5, size=n))
+    X_val = X.iloc[:100]
+    y_val = y.iloc[:100]
+    model = QuantileGBM().fit(X.iloc[100:], y.iloc[100:], X_val=X_val, y_val=y_val)
+    for q, m in model.models.items():
+        n_trees = m.booster_.num_trees()
+        assert 0 < n_trees <= 800          # early-stopped below the ceiling
+        # final model is the refit (n_estimators pinned to best_iter, no ES run)
+        assert m.get_params()["n_estimators"] == n_trees
+        assert not m.best_iteration_
+
+
+def test_predictions_track_signal():
+    """OOF-style sanity: predictions must correlate with the generating signal
+    (guards against a constant-output model passing monotonicity alone)."""
+    from scipy.stats import spearmanr
+    rng = np.random.default_rng(2)
+    n = 600
+    X = pd.DataFrame({"a": rng.normal(size=n), "b": rng.normal(size=n)})
+    y = pd.Series(5 * X["a"] + rng.normal(scale=0.5, size=n))
+    model = QuantileGBM().fit(X.iloc[:400], y.iloc[:400])
+    preds = model.predict(X.iloc[400:])
+    rho, _ = spearmanr(preds["p50"], y.iloc[400:])
+    assert rho > 0.8

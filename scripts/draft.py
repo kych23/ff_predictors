@@ -21,11 +21,10 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import pandas as pd
-from sqlalchemy import select
 
 from src.config import load_config
-from src.db.models import Adp, Player, Projection
-from src.db.session import SessionLocal
+from src.db.loaders import load_adp_df, load_players_df, load_projections_df
+from src.db.session import session_scope
 from src.recommender.draft_state_source import ManualDraftSource, adp_auto_advance
 from src.recommender.recommend import build_replacement_from_projections, recommend
 from src.recommender.roster_state import RosterState
@@ -54,32 +53,17 @@ def _compute_bye_weeks(season: int) -> dict:
             if missing:
                 bye[team] = missing[0]
         return bye
-    except Exception:
+    except Exception as exc:
+        print(f"warning: bye weeks unavailable ({exc})", file=sys.stderr)
         return {}
 
 
 def _load_board(season: int, cfg) -> pd.DataFrame:
-    session = SessionLocal()
-    try:
-        proj = pd.DataFrame([
-            {"player_id": r.player_id, "position": r.position, "p10": r.p10,
-             "p50": r.p50, "p90": r.p90}
-            for r in session.execute(
-                select(Projection).where(Projection.season == season)).scalars()
-        ])
-        adp = pd.DataFrame([
-            {"player_id": r.player_id, "adp": r.adp, "adp_stdev": r.adp_stdev}
-            for r in session.execute(
-                select(Adp).where(Adp.season == season,
-                                  Adp.format == cfg.adp.format,
-                                  Adp.teams == cfg.adp.teams)).scalars()
-        ])
-        names = pd.DataFrame([
-            {"player_id": r.player_id, "name": r.name, "team": r.latest_team}
-            for r in session.execute(select(Player)).scalars()
-        ])
-    finally:
-        session.close()
+    with session_scope() as session:
+        proj = load_projections_df(session, season)[
+            ["player_id", "position", "p10", "p50", "p90"]]
+        adp = load_adp_df(session, cfg, season)[["player_id", "adp", "adp_stdev"]]
+        names = load_players_df(session)
     board = proj.merge(adp, on="player_id", how="left").merge(names, on="player_id", how="left")
     bye_map = _compute_bye_weeks(season)
     if bye_map:

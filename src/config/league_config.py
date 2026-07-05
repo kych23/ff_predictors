@@ -24,7 +24,7 @@ DEFAULT_CONFIG_PATH = _REPO_ROOT / "config" / "league.yaml"
 class ScoringConfig:
     pass_yd: float
     pass_td: float
-    int: float
+    interception: float   # YAML key is `int` (avoid shadowing the builtin here)
     rush_yd: float
     rush_td: float
     rec: float
@@ -80,8 +80,6 @@ class BacktestConfig:
 @dataclass(frozen=True)
 class LeagueConfig:
     teams: int
-    type: str
-    kind: str
     roster: RosterConfig
     scoring: ScoringConfig
     adp: AdpConfig
@@ -90,23 +88,10 @@ class LeagueConfig:
     version_hash: str = field(compare=False)
     raw: dict = field(compare=False, repr=False, default_factory=dict)
 
-    # --- derived scarcity constants (DrafterSpec.md §4.2.1 / §4.8.1) ---
-    @property
-    def n_teams(self) -> int:
-        return self.teams
-
-    @property
-    def roster_rounds(self) -> int:
-        return self.roster.rounds
-
     @property
     def adp_min_fullsim(self) -> int:
         """Full-draft ADP coverage needed for Tier-2 sim = teams * rounds (§4.0)."""
         return self.teams * self.roster.rounds
-
-    def league_starter_count(self, position: str) -> int:
-        """Pure starter slots across the league (e.g. RB -> 12*2 = 24)."""
-        return self.teams * self.roster.starter_slots(position)
 
     @property
     def model_version(self) -> str:
@@ -154,6 +139,25 @@ def _validate(raw: dict) -> None:
     missing_scoring = scoring_keys - set(raw["scoring"])
     if missing_scoring:
         raise ValueError(f"scoring section missing keys: {sorted(missing_scoring)}")
+    extra_scoring = set(raw["scoring"]) - scoring_keys
+    if extra_scoring:
+        raise ValueError(f"scoring section has unknown keys: {sorted(extra_scoring)}")
+
+    if "teams" not in raw["league"]:
+        raise ValueError("league.yaml missing league.teams")
+    training_keys = {"min_games_train", "ewm_halflife_seasons",
+                     "min_train_seasons", "min_bucket_n"}
+    missing_training = training_keys - set(raw["training"])
+    if missing_training:
+        raise ValueError(f"training section missing keys: {sorted(missing_training)}")
+    backtest_keys = {"start_season", "end_season"}
+    missing_backtest = backtest_keys - set(raw["backtest"])
+    if missing_backtest:
+        raise ValueError(f"backtest section missing keys: {sorted(missing_backtest)}")
+    adp_keys = {"format", "adp_min_ranking"}
+    missing_adp = adp_keys - set(raw["adp"])
+    if missing_adp:
+        raise ValueError(f"adp section missing keys: {sorted(missing_adp)}")
 
 
 @lru_cache(maxsize=8)
@@ -172,7 +176,8 @@ def load_config(path: str | None = None) -> LeagueConfig:
         max_per_position={str(k): int(v)
                           for k, v in raw["roster"].get("max_per_position", {}).items()},
     )
-    scoring = ScoringConfig(**{k: float(v) for k, v in raw["scoring"].items()})
+    scoring = ScoringConfig(**{("interception" if k == "int" else k): float(v)
+                               for k, v in raw["scoring"].items()})
     adp = AdpConfig(
         format=str(raw["adp"]["format"]),
         teams=int(raw["adp"].get("teams", lg["teams"])),
@@ -191,8 +196,6 @@ def load_config(path: str | None = None) -> LeagueConfig:
     )
     return LeagueConfig(
         teams=int(lg["teams"]),
-        type=str(lg["type"]),
-        kind=str(lg["kind"]),
         roster=roster,
         scoring=scoring,
         adp=adp,

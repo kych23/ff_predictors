@@ -74,6 +74,28 @@ def test_strategy_safe_uses_p10():
     assert result_upside.strategy == "upside"
 
 
+def test_strategy_changes_lineup():
+    """When p10 and p90 rankings diverge, strategy should pick different starters."""
+    roster = _roster([
+        {"player_id": "qb1", "position": "QB", "p10": 15, "p50": 18, "p90": 20},
+        {"player_id": "rb_floor", "position": "RB", "p10": 15, "p50": 16, "p90": 16},
+        {"player_id": "rb_upside", "position": "RB", "p10": 1, "p50": 10, "p90": 30},
+        {"player_id": "rb3", "position": "RB", "p10": 8, "p50": 12, "p90": 18},
+        {"player_id": "wr1", "position": "WR", "p10": 11, "p50": 17, "p90": 24},
+        {"player_id": "wr2", "position": "WR", "p10": 9, "p50": 14, "p90": 20},
+        {"player_id": "wr3", "position": "WR", "p10": 7, "p50": 11, "p90": 16},
+        {"player_id": "te1", "position": "TE", "p10": 8, "p50": 13, "p90": 19},
+        {"player_id": "k1", "position": "K", "p10": 5, "p50": 8, "p90": 12},
+        {"player_id": "def1", "position": "DEF", "p10": 4, "p50": 7, "p90": 11},
+    ])
+    safe = optimize_lineup(roster, strategy="safe")
+    upside = optimize_lineup(roster, strategy="upside")
+    safe_ids = set(safe.starters["player_id"])
+    upside_ids = set(upside.starters["player_id"])
+    assert "rb_floor" in safe_ids
+    assert "rb_upside" in upside_ids
+
+
 def test_excluded_players():
     roster = _full_roster()
     result = optimize_lineup(roster, excluded_ids={"qb1"})

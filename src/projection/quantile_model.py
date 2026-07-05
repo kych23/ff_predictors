@@ -57,6 +57,13 @@ class QuantileGBM:
             X_val: pd.DataFrame | None = None,
             y_val: pd.Series | None = None,
             early_stopping_rounds: int = 50) -> "QuantileGBM":
+        """Fit the three quantile models with early stopping + refit.
+
+        Early stopping picks the tree count on a holdout (the caller's temporal
+        ``X_val`` when given, else a random 15% carve-out), then each model is
+        REFIT on train+holdout at that tree count — the holdout only tunes
+        n_trees, its rows are never lost from training.
+        """
         if lgb is None:
             raise ImportError("lightgbm is required to train the projection engine")
         self.feature_names = list(X.columns)
@@ -68,7 +75,6 @@ class QuantileGBM:
             if n < 60:
                 use_early_stop = False
             else:
-                # random 15% holdout for early stopping
                 rng = np.random.RandomState(42)
                 val_idx = rng.choice(n, size=max(int(n * 0.15), 10), replace=False)
                 train_idx = np.setdiff1d(np.arange(n), val_idx)
@@ -77,22 +83,35 @@ class QuantileGBM:
                 X = X.iloc[train_idx]
                 y = y.iloc[train_idx]
 
-        callbacks = []
-        if use_early_stop:
-            callbacks = [lgb.early_stopping(early_stopping_rounds, verbose=False),
-                         lgb.log_evaluation(period=0)]
-
         for q in self.quantiles:
             params = dict(self.params)
             params["alpha"] = q
-            model = lgb.LGBMRegressor(**params)
             fit_kwargs: dict = {"categorical_feature": cat or "auto"}
-            if use_early_stop:
-                fit_kwargs["eval_set"] = [(X_val, y_val)]
-                fit_kwargs["callbacks"] = callbacks
-            model.fit(X, y, **fit_kwargs)
+            if not use_early_stop:
+                model = lgb.LGBMRegressor(**params)
+                model.fit(X, y, **fit_kwargs)
+                self.models[q] = model
+                continue
+
+            probe = lgb.LGBMRegressor(**params)
+            probe.fit(X, y, eval_set=[(X_val, y_val)],
+                      callbacks=[lgb.early_stopping(early_stopping_rounds, verbose=False),
+                                 lgb.log_evaluation(period=0)],
+                      **fit_kwargs)
+            best_iter = probe.best_iteration_ or params["n_estimators"]
+            params["n_estimators"] = int(best_iter)
+            model = lgb.LGBMRegressor(**params)
+            model.fit(pd.concat([X, X_val]), pd.concat([y, y_val]), **fit_kwargs)
             self.models[q] = model
         return self
+
+    def feature_importance(self, quantile: float = 0.50) -> pd.Series:
+        """Gain importance of the fitted model at ``quantile``, descending."""
+        model = self.models.get(quantile)
+        if model is None:
+            return pd.Series(dtype=float)
+        gains = model.booster_.feature_importance(importance_type="gain")
+        return pd.Series(gains, index=self.feature_names).sort_values(ascending=False)
 
     def predict(self, X: pd.DataFrame) -> pd.DataFrame:
         """Return a DataFrame with monotonic p10/p50/p90 columns (rearranged)."""

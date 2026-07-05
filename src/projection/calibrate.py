@@ -99,3 +99,44 @@ class IntervalCalibrator:
         vals = np.sort(out[["p10", "p50", "p90"]].to_numpy(), axis=1)
         out[["p10", "p50", "p90"]] = vals
         return out
+
+
+def coverage_by_bucket(oof: pd.DataFrame) -> pd.DataFrame:
+    """Empirical P10–P90 coverage per bucket (diagnostic; nominal is 0.80).
+
+    ``oof`` needs columns p10/p90/y/bucket. Returns bucket, n, coverage rows
+    with an ``_all`` aggregate first.
+    """
+    df = oof.copy()
+    df["inside"] = (df["y"] >= df["p10"]) & (df["y"] <= df["p90"])
+    rows = [{"bucket": "_all", "n": len(df), "coverage": float(df["inside"].mean())}]
+    for b, g in df.groupby("bucket"):
+        rows.append({"bucket": b, "n": len(g), "coverage": float(g["inside"].mean())})
+    return pd.DataFrame(rows)
+
+
+def calibrate_oof_lofo(oof: pd.DataFrame, min_bucket_n: int) -> pd.DataFrame:
+    """Leave-one-season-out calibration of OOF predictions (honest coverage).
+
+    Fitting a calibrator on all OOF residuals and transforming those same rows
+    lets each row's own residual shrink its own nonconformity score, inflating
+    reported coverage. Here each test season is transformed by a calibrator fit
+    on the OTHER test seasons only. Falls back to fit-on-self when there is a
+    single test season (LOFO is undefined there).
+
+    ``oof`` needs columns p10/p50/p90/y/bucket/season. Returns a copy with
+    calibrated quantile columns; the input is not mutated.
+    """
+    seasons = oof["season"].unique()
+    out = oof.copy()
+    if len(seasons) < 2:
+        cal = IntervalCalibrator(min_bucket_n).fit(oof)
+        out[["p10", "p50", "p90"]] = cal.transform(
+            oof[["p10", "p50", "p90"]], oof["bucket"])
+        return out
+    for s in seasons:
+        mask = out["season"] == s
+        cal = IntervalCalibrator(min_bucket_n).fit(oof[~mask])
+        out.loc[mask, ["p10", "p50", "p90"]] = cal.transform(
+            oof.loc[mask, ["p10", "p50", "p90"]], oof.loc[mask, "bucket"]).values
+    return out

@@ -21,7 +21,13 @@ from __future__ import annotations
 
 import pandas as pd
 
+from ._utils import schedule_to_team_lines
+
 CTX_COLS = ["team_ctx_implied_pts", "team_ctx_game_total", "team_ctx_spread"]
+
+_RENAME = {"implied_pts": "team_ctx_implied_pts",
+           "game_total": "team_ctx_game_total",
+           "spread": "team_ctx_spread"}
 
 
 def build_team_context(schedules_y: pd.DataFrame) -> pd.DataFrame:
@@ -47,17 +53,5 @@ def build_team_context(schedules_y: pd.DataFrame) -> pd.DataFrame:
     if s.empty:
         return empty
 
-    home = pd.DataFrame({
-        "team": s["home_team"].astype(str),
-        "team_ctx_implied_pts": s["total_line"] / 2 + s["spread_line"] / 2,
-        "team_ctx_game_total": s["total_line"],
-        "team_ctx_spread": s["spread_line"],
-    })
-    away = pd.DataFrame({
-        "team": s["away_team"].astype(str),
-        "team_ctx_implied_pts": s["total_line"] / 2 - s["spread_line"] / 2,
-        "team_ctx_game_total": s["total_line"],
-        "team_ctx_spread": -s["spread_line"],
-    })
-    out = pd.concat([home, away], ignore_index=True).drop_duplicates("team", keep="first")
-    return out.reset_index(drop=True)
+    out = schedule_to_team_lines(s).rename(columns=_RENAME)
+    return out[["team"] + CTX_COLS].reset_index(drop=True)

@@ -24,7 +24,7 @@ from src.benchmark.ranking import run_ranking_benchmark
 from src.benchmark.report import DATA_COMPLETE_ERA_START, format_gate
 from src.config import load_config
 from src.db.models import Adp, AdpCoverage, Projection, SeasonFeature, SeasonLabel
-from src.db.session import SessionLocal, resolve_snapshot
+from src.db.session import resolve_snapshot, session_scope
 
 
 def _read(session, model, cols) -> pd.DataFrame:
@@ -42,14 +42,12 @@ def main() -> None:
     resolve_snapshot(args.snapshot_id)  # validate a snapshot exists + log it
     cfg = load_config()
 
-    session = SessionLocal()
-    try:
+    with session_scope() as session:
         proj = _read(session, Projection, ["player_id", "season", "p50", "p10", "p90", "position"])
         adp = _read(session, Adp, ["player_id", "season", "adp"])
         labels = _read(session, SeasonLabel, ["player_id", "season", "fppg"])
         cov = _read(session, AdpCoverage, ["season", "ranking_eligible", "sim_eligible"])
-    finally:
-        session.close()
+        frows = session.execute(select(SeasonFeature)).scalars().all()
 
     if proj.empty or adp.empty or labels.empty:
         print("Missing data (projections/adp/labels). Run M0-M3 first.")
@@ -72,11 +70,6 @@ def main() -> None:
     # Tier-3 calibration uses projections joined to actual labels + the
     # bucket-driving fields from season_features (is_rookie, seasons_of_history,
     # team_changed) so coverage is reported BY player-type, not collapsed.
-    session = SessionLocal()
-    try:
-        frows = session.execute(select(SeasonFeature)).scalars().all()
-    finally:
-        session.close()
     bucket_fields = pd.DataFrame([
         {"player_id": r.player_id, "season": r.season, "is_rookie": r.is_rookie,
          "seasons_of_history": (r.features or {}).get("seasons_of_history"),

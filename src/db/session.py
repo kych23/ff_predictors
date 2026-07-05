@@ -1,11 +1,13 @@
 import os
-from typing import Generator, Optional
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator, Optional
 from dotenv import load_dotenv
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
-load_dotenv(dotenv_path=".env")
+load_dotenv(dotenv_path=Path(__file__).resolve().parents[2] / ".env")
 
 def _get_database_url() -> str:
     url = os.getenv("DATABASE_URL")
@@ -14,13 +16,44 @@ def _get_database_url() -> str:
     return url
 
 
-engine = create_engine(_get_database_url(), pool_pre_ping=True, future=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, class_=Session, future=True)
+_engine = None
 
-def get_session() -> Generator[Session, None, None]:
+
+def get_engine():
+    """Create the engine on first use so importing this module never needs a DB."""
+    global _engine
+    if _engine is None:
+        _engine = create_engine(_get_database_url(), pool_pre_ping=True, future=True)
+        SessionLocal.configure(bind=_engine)
+    return _engine
+
+
+class _LazySessionFactory(sessionmaker):
+    """sessionmaker that binds the engine on first session creation."""
+
+    def __call__(self, **kwargs):
+        get_engine()
+        return super().__call__(**kwargs)
+
+
+SessionLocal = _LazySessionFactory(autoflush=False, autocommit=False,
+                                   class_=Session, future=True)
+
+
+@contextmanager
+def session_scope() -> Iterator[Session]:
+    """Session with rollback-on-error and guaranteed close.
+
+    Read-only callers just use the session; writers call ``session.commit()``
+    themselves (commit stays explicit so partial-write semantics are visible
+    at the call site).
+    """
     session = SessionLocal()
     try:
         yield session
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -28,14 +61,11 @@ def get_session() -> Generator[Session, None, None]:
 def latest_snapshot_id() -> Optional[str]:
     """Return the most recently created ingest snapshot_id, or None if DB is empty."""
     from src.db.models import IngestSnapshot
-    session = SessionLocal()
-    try:
+    with session_scope() as session:
         row = session.execute(
             select(IngestSnapshot).order_by(IngestSnapshot.extracted_at.desc())
         ).scalars().first()
         return row.snapshot_id if row else None
-    finally:
-        session.close()
 
 
 def resolve_snapshot(snapshot_id: Optional[str] = None) -> str:

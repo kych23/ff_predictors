@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from src.config import load_config
 from src.db.models import WeeklyStatsRaw
-from src.db.session import SessionLocal
+from src.db.session import session_scope
 from src.db.upsert_data import upsert_season_labels, upsert_weekly_labels
 
 from .scoring import score_dataframe
@@ -60,8 +60,7 @@ def compute_labels(weekly: pd.DataFrame, min_games: int, snapshot_id: str) -> pd
 
 def build_labels(snapshot_id: Optional[str] = None, config_path: Optional[str] = None) -> int:
     cfg = load_config(config_path)
-    session = SessionLocal()
-    try:
+    with session_scope() as session:
         weekly = _load_weekly_raw(session, snapshot_id)
         if weekly.empty:
             logger.warning("no weekly_stats_raw rows found (snapshot_id=%s)", snapshot_id)
@@ -72,11 +71,6 @@ def build_labels(snapshot_id: Optional[str] = None, config_path: Optional[str] =
         session.commit()
         logger.info("season_labels upserted: %d (min_games=%d)", n, cfg.training.min_games_train)
         return n
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
 def compute_weekly_labels(weekly: pd.DataFrame, snapshot_id: str) -> pd.DataFrame:
@@ -93,8 +87,7 @@ def compute_weekly_labels(weekly: pd.DataFrame, snapshot_id: str) -> pd.DataFram
 
 def build_weekly_labels(snapshot_id: Optional[str] = None) -> int:
     """Load WeeklyStatsRaw, compute weekly labels, upsert."""
-    session = SessionLocal()
-    try:
+    with session_scope() as session:
         weekly = _load_weekly_raw(session, snapshot_id)
         if weekly.empty:
             logger.warning("no weekly_stats_raw rows for weekly labels (snapshot_id=%s)", snapshot_id)
@@ -105,8 +98,3 @@ def build_weekly_labels(snapshot_id: Optional[str] = None) -> int:
         session.commit()
         logger.info("weekly_labels upserted: %d rows", n)
         return n
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()

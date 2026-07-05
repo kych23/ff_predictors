@@ -12,6 +12,35 @@ import pandas as pd
 
 from src.labels.scoring import score_dataframe
 
+# An offseason decays prior-season signal like this many missed games. With
+# halflife=3, the last game of season Y-1 carries an extra 0.5^(6/3) = 0.25x
+# weight at Week 1 of season Y — recent form matters, but a hot December
+# shouldn't dominate a September projection after roster/scheme turnover.
+OFFSEASON_GAP_GAMES = 6.0
+
+
+def _gap_aware_ewma_last(grp: pd.DataFrame, cols, *, halflife: float,
+                         season_gap: float = OFFSEASON_GAP_GAMES) -> dict:
+    """EWMA final value over ordered games, with extra decay across offseasons.
+
+    Builds a synthetic game clock (consecutive games 1 apart, +``season_gap``
+    when the season changes) and takes the weight-0.5^(dist/halflife) mean of
+    each column, ignoring NaNs. ``grp`` must be sorted chronologically.
+    """
+    seasons = pd.to_numeric(grp["season"], errors="coerce").to_numpy()
+    n = len(grp)
+    t = np.arange(n, dtype=float)
+    if n > 1:
+        t += np.cumsum(np.r_[0.0, (seasons[1:] != seasons[:-1]) * season_gap])
+    dist = t[-1] - t
+    w = 0.5 ** (dist / halflife)
+    out = {}
+    for c in cols:
+        v = pd.to_numeric(grp[c], errors="coerce").to_numpy(dtype=float)
+        m = ~np.isnan(v)
+        out[c] = float((w[m] * v[m]).sum() / w[m].sum()) if m.any() else np.nan
+    return out
+
 
 def build_weekly_vegas(schedules: pd.DataFrame, target_season: int,
                        target_week: int) -> pd.DataFrame:
@@ -20,6 +49,8 @@ def build_weekly_vegas(schedules: pd.DataFrame, target_season: int,
     Returns (team, opponent, wk_implied_pts, wk_game_total, wk_spread).
     One row per team (two rows per game). Empty if no lines available.
     """
+    from ._utils import schedule_to_team_lines
+
     empty = pd.DataFrame(columns=["team", "opponent", "wk_implied_pts",
                                   "wk_game_total", "wk_spread"])
     if schedules is None or schedules.empty:
@@ -38,21 +69,9 @@ def build_weekly_vegas(schedules: pd.DataFrame, target_season: int,
     if s.empty:
         return empty
 
-    home = pd.DataFrame({
-        "team": s["home_team"].astype(str),
-        "opponent": s["away_team"].astype(str),
-        "wk_implied_pts": s["total_line"].values / 2 + s["spread_line"].values / 2,
-        "wk_game_total": s["total_line"].values,
-        "wk_spread": s["spread_line"].values,
-    })
-    away = pd.DataFrame({
-        "team": s["away_team"].astype(str),
-        "opponent": s["home_team"].astype(str),
-        "wk_implied_pts": s["total_line"].values / 2 - s["spread_line"].values / 2,
-        "wk_game_total": s["total_line"].values,
-        "wk_spread": -s["spread_line"].values,
-    })
-    return pd.concat([home, away], ignore_index=True).drop_duplicates("team", keep="first")
+    rename = {"implied_pts": "wk_implied_pts", "game_total": "wk_game_total",
+              "spread": "wk_spread"}
+    return schedule_to_team_lines(s).rename(columns=rename)
 
 
 def build_opponent_dvp(weekly_labels: pd.DataFrame, schedules: pd.DataFrame,
@@ -92,8 +111,8 @@ def build_opponent_dvp(weekly_labels: pd.DataFrame, schedules: pd.DataFrame,
 
     results = []
     for (opp, pos), grp in game_totals.groupby(["opponent", "position"]):
-        ewma = grp["fantasy_points"].ewm(halflife=halflife_games).mean()
-        results.append({"team": opp, "position": pos, "dvp_fpa": ewma.iloc[-1]})
+        vals = _gap_aware_ewma_last(grp, ["fantasy_points"], halflife=halflife_games)
+        results.append({"team": opp, "position": pos, "dvp_fpa": vals["fantasy_points"]})
     return pd.DataFrame(results) if results else empty
 
 
@@ -125,7 +144,6 @@ def build_rolling_player_stats(player_stats: pd.DataFrame,
         else:
             ps[c] = pd.to_numeric(ps[c], errors="coerce")
 
-    snap_share_map = {}
     if snap_counts is not None and not snap_counts.empty and pfr_to_gsis:
         sc = snap_counts.copy()
         sc["player_id"] = sc["pfr_player_id"].astype("string").map(pfr_to_gsis)
@@ -134,22 +152,21 @@ def build_rolling_player_stats(player_stats: pd.DataFrame,
             sc["offense_pct"] = pd.to_numeric(sc["offense_pct"], errors="coerce")
             sc["season"] = pd.to_numeric(sc["season"], errors="coerce")
             sc["week"] = pd.to_numeric(sc["week"], errors="coerce")
-            for _, row in sc.iterrows():
-                key = (str(row["player_id"]), int(row["season"]), int(row["week"]))
-                snap_share_map[key] = row["offense_pct"]
-
-    ps["snap_share"] = ps.apply(
-        lambda r: snap_share_map.get((str(r["player_id"]), int(r["season"]), int(r["week"]))),
-        axis=1,
-    )
+            sc["player_id"] = sc["player_id"].astype(str)
+            sc_lookup = sc[["player_id", "season", "week", "offense_pct"]].rename(
+                columns={"offense_pct": "snap_share"})
+            ps = ps.merge(sc_lookup, on=["player_id", "season", "week"], how="left")
+        else:
+            ps["snap_share"] = np.nan
+    else:
+        ps["snap_share"] = np.nan
 
     ps = ps.sort_values(["player_id", "season", "week"])
     results = []
     for pid, grp in ps.groupby("player_id"):
-        ewm = grp[["fppg_raw", "target_share", "snap_share", "carries"]].ewm(
-            halflife=halflife_games
-        ).mean()
-        last = ewm.iloc[-1]
+        last = _gap_aware_ewma_last(
+            grp, ["fppg_raw", "target_share", "snap_share", "carries"],
+            halflife=halflife_games)
         results.append({
             "player_id": pid,
             "rolling_fppg": last["fppg_raw"],
