@@ -1,7 +1,7 @@
 """Build weekly labels + weekly features.
 
 Must run AFTER seed_db.py (populates WeeklyStatsRaw) and train_projection.py
-(populates Projection table for season_p50). Not part of run_pipeline.sh —
+(populates Projection table for season_p50). Step 6 of run_pipeline.sh —
 serves the weekly "Who Should I Start?" feature.
 
 Usage:

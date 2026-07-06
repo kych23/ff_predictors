@@ -29,7 +29,10 @@ models/
 data/
 
 .agents/
-.claude/
+# ignore .claude contents but keep skills tracked (a dir-level ignore would
+# block the negation — git never descends into fully-ignored directories)
+.claude/*
+!.claude/skills/
 CLAUDE.md
 .pytest_cache/
 

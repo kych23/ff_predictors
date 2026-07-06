@@ -180,17 +180,12 @@ def assemble_weekly_features(target_season: int, target_week: int,
     })
 
 
-def build_weekly_features_range(start_season: int, end_season: int, *,
-                                snapshot_id: Optional[str] = None) -> int:
-    """Build weekly features for all (season, week) in range."""
+def _load_weekly_frames(load_seasons: list, session) -> Dict[str, pd.DataFrame]:
+    """Load all source frames for weekly assembly (nflreadpy + DB tables)."""
     from sqlalchemy import select
 
     from src.ingest import sources
     from src.ingest.player_ids import build_id_map
-
-    seasons = list(range(start_season, end_season + 1))
-    # two prior seasons so players who missed a full year still have rolling stats
-    load_seasons = list(range(start_season - 2, end_season + 1))
 
     logger.info("loading nflreadpy sources for %d..%d", load_seasons[0], load_seasons[-1])
     player_stats = sources.load_player_stats(load_seasons)
@@ -201,40 +196,51 @@ def build_weekly_features_range(start_season: int, end_season: int, *,
     id_map = build_id_map()
     pfr_to_gsis = dict(zip(id_map["pfr_id"].astype("string"), id_map["gsis_id"].astype(str)))
 
+    wl_rows = session.execute(select(WeeklyLabel)).scalars().all()
+    weekly_labels = pd.DataFrame([
+        {"player_id": r.player_id, "season": r.season, "week": r.week,
+         "position": r.position, "team": r.team, "fantasy_points": r.fantasy_points}
+        for r in wl_rows
+    ]) if wl_rows else pd.DataFrame(
+        columns=["player_id", "season", "week", "position", "team", "fantasy_points"])
+
+    proj_rows = session.execute(select(Projection)).scalars().all()
+    if proj_rows:
+        pdf = pd.DataFrame([
+            {"player_id": r.player_id, "season": r.season, "position": r.position,
+             "p50": r.p50, "model_version": r.model_version}
+            for r in proj_rows
+        ])
+        pdf = pdf.sort_values("model_version").drop_duplicates(
+            ["player_id", "season"], keep="last")
+        projections = pdf.rename(columns={"p50": "season_p50"})[
+            ["player_id", "season", "position", "season_p50"]]
+    else:
+        logger.warning("Projection table empty — season_p50 will be NaN")
+        projections = pd.DataFrame(
+            columns=["player_id", "season", "position", "season_p50"])
+
+    return {
+        "player_stats": player_stats,
+        "snap_counts": snap_counts,
+        "schedules": schedules,
+        "rosters": rosters,
+        "weekly_labels": weekly_labels,
+        "projections": projections,
+        "pfr_to_gsis": pfr_to_gsis,
+    }
+
+
+def build_weekly_features_range(start_season: int, end_season: int, *,
+                                snapshot_id: Optional[str] = None) -> int:
+    """Build weekly features for all (season, week) in range."""
+    seasons = list(range(start_season, end_season + 1))
+    # two prior seasons so players who missed a full year still have rolling stats
+    load_seasons = list(range(start_season - 2, end_season + 1))
+
     with session_scope() as session:
-        wl_rows = session.execute(select(WeeklyLabel)).scalars().all()
-        weekly_labels = pd.DataFrame([
-            {"player_id": r.player_id, "season": r.season, "week": r.week,
-             "position": r.position, "team": r.team, "fantasy_points": r.fantasy_points}
-            for r in wl_rows
-        ]) if wl_rows else pd.DataFrame(
-            columns=["player_id", "season", "week", "position", "team", "fantasy_points"])
-
-        proj_rows = session.execute(select(Projection)).scalars().all()
-        if proj_rows:
-            pdf = pd.DataFrame([
-                {"player_id": r.player_id, "season": r.season, "position": r.position,
-                 "p50": r.p50, "model_version": r.model_version}
-                for r in proj_rows
-            ])
-            pdf = pdf.sort_values("model_version").drop_duplicates(
-                ["player_id", "season"], keep="last")
-            projections = pdf.rename(columns={"p50": "season_p50"})[
-                ["player_id", "season", "position", "season_p50"]]
-        else:
-            logger.warning("Projection table empty — season_p50 will be NaN")
-            projections = pd.DataFrame(
-                columns=["player_id", "season", "position", "season_p50"])
-
-        frames = {
-            "player_stats": player_stats,
-            "snap_counts": snap_counts,
-            "schedules": schedules,
-            "rosters": rosters,
-            "weekly_labels": weekly_labels,
-            "projections": projections,
-            "pfr_to_gsis": pfr_to_gsis,
-        }
+        frames = _load_weekly_frames(load_seasons, session)
+        weekly_labels = frames["weekly_labels"]
 
         total = 0
         for Y in seasons:
@@ -255,3 +261,30 @@ def build_weekly_features_range(start_season: int, end_season: int, *,
 
         logger.info("weekly_features total: %d rows", total)
         return total
+
+
+def build_weekly_features_for_week(target_season: int, target_week: int, *,
+                                   snapshot_id: Optional[str] = None) -> int:
+    """Build (and upsert) weekly features for ONE (season, week).
+
+    Forward-serving entry point: unlike the range builder, it does not require
+    labels for the target week, so it works for an upcoming, not-yet-played
+    week. The assembler itself is as-of-kickoff safe (leakage_guard filters,
+    roster-based universe when the season has no labels yet, Vegas lines from
+    the schedule)."""
+    load_seasons = list(range(target_season - 2, target_season + 1))
+
+    with session_scope() as session:
+        frames = _load_weekly_frames(load_seasons, session)
+        rows = assemble_weekly_features(target_season, target_week, frames,
+                                        snapshot_id=snapshot_id)
+        if rows.empty:
+            logger.warning("no weekly feature rows for %d week %d (no games "
+                           "scheduled, or empty player universe)",
+                           target_season, target_week)
+            return 0
+        n = upsert_weekly_features(rows, session)
+        session.commit()
+        logger.info("weekly_features for %d week %d: %d rows",
+                    target_season, target_week, n)
+        return n

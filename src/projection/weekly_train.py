@@ -99,6 +99,48 @@ def fit_weekly_full(ds: WeeklyDataset, *, params: Optional[dict] = None) -> Quan
     return model
 
 
+def forward_train_mask(meta: pd.DataFrame, target_season: int,
+                       target_week: int) -> np.ndarray:
+    """Rows strictly before (target_season, target_week) — the as-of-kickoff
+    training window for forward serving. Same-week and later rows are excluded
+    so re-projecting an already-played week can never train on its own labels."""
+    season = pd.to_numeric(meta["season"], errors="coerce")
+    week = pd.to_numeric(meta["week"], errors="coerce")
+    return ((season < target_season)
+            | ((season == target_season) & (week < target_week))).to_numpy()
+
+
+def project_weekly_forward(ds: WeeklyDataset, target: WeeklyDataset,
+                           target_season: int, target_week: int, *,
+                           cfg: Optional[LeagueConfig] = None,
+                           params: Optional[dict] = None) -> pd.DataFrame:
+    """Forward-serving path: project one (season, week) from its feature rows.
+
+    Trains on all labeled rows strictly before the target week, widens the raw
+    intervals with the serving calibrator from the OOF run (position buckets),
+    and returns monotonic p10/p50/p90 per target row. ``target`` is an
+    unlabeled WeeklyDataset (require_label=False) holding the week to project.
+    """
+    cfg = cfg or load_config()
+    keep = forward_train_mask(ds.meta, target_season, target_week)
+    train = WeeklyDataset(X=ds.X[keep], y=ds.y[keep], meta=ds.meta[keep],
+                          feature_names=ds.feature_names)
+    if len(train) == 0 or len(target) == 0:
+        return pd.DataFrame()
+
+    oof = train_weekly_oof(train, cfg=cfg, params=params)
+    model = fit_weekly_full(train, params=params)
+
+    preds = model.predict(target.X).reset_index(drop=True)
+    out = target.meta.reset_index(drop=True).copy()
+    out[["p10", "p50", "p90"]] = preds[["p10", "p50", "p90"]]
+    buckets = out.apply(_weekly_bucket, axis=1)
+    # unfitted calibrator (too few seasons for folds) falls back to identity
+    out[["p10", "p50", "p90"]] = oof.calibrator.transform(
+        out[["p10", "p50", "p90"]], buckets)
+    return out
+
+
 def train_weekly_and_write(snapshot_id: Optional[str] = None, *,
                            config_path: Optional[str] = None) -> int:
     """DB path: load weekly dataset, OOF + write projections."""
@@ -124,4 +166,53 @@ def train_weekly_and_write(snapshot_id: Optional[str] = None, *,
                  "p10", "p50", "p90", "snapshot_id"]], session)
         session.commit()
         logger.info("weekly projections written: %d OOF (model_version=%s)", n, mv)
+        return n
+
+
+def project_weekly_forward_and_write(target_season: int, target_week: int,
+                                     snapshot_id: Optional[str] = None, *,
+                                     config_path: Optional[str] = None) -> int:
+    """DB path for forward serving: build target-week features, train on all
+    strictly-prior labeled weeks, write projections as ``weekly_fwd_v1.*``."""
+    from src.db.session import session_scope
+    from src.db.upsert_data import upsert_weekly_projections
+    from src.features.weekly_assemble import build_weekly_features_for_week
+
+    from .weekly_dataset import load_weekly_dataset
+
+    cfg = load_config(config_path)
+    n_feat = build_weekly_features_for_week(target_season, target_week,
+                                            snapshot_id=snapshot_id)
+    if n_feat == 0:
+        return 0
+
+    with session_scope() as session:
+        ds = load_weekly_dataset(session, snapshot_id, cfg=cfg,
+                                 require_label=False)
+        if len(ds) == 0:
+            logger.warning("empty weekly dataset — run build_weekly_data.py first")
+            return 0
+        is_target = ((ds.meta["season"] == target_season)
+                     & (ds.meta["week"] == target_week)).to_numpy()
+        labeled = ds.y.notna().to_numpy()
+
+        def _subset(mask):
+            return WeeklyDataset(X=ds.X[mask], y=ds.y[mask], meta=ds.meta[mask],
+                                 feature_names=ds.feature_names)
+
+        out = project_weekly_forward(_subset(labeled), _subset(is_target),
+                                     target_season, target_week, cfg=cfg)
+        if out.empty:
+            logger.warning("no forward projections produced for %d week %d",
+                           target_season, target_week)
+            return 0
+        mv = f"weekly_fwd_v1.{cfg.version_hash}"
+        out["model_version"] = mv
+        out["snapshot_id"] = snapshot_id
+        n = upsert_weekly_projections(
+            out[["player_id", "season", "week", "model_version", "position",
+                 "p10", "p50", "p90", "snapshot_id"]], session)
+        session.commit()
+        logger.info("forward weekly projections written: %d for %d week %d "
+                    "(model_version=%s)", n, target_season, target_week, mv)
         return n

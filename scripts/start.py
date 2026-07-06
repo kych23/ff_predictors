@@ -79,6 +79,7 @@ def _load_projections(session, season: int, week: int, player_ids: set):
     # Try weekly projections first
     weekly = pd.DataFrame([
         {"player_id": r.player_id, "position": r.position,
+         "model_version": r.model_version,
          "p10": r.p10, "p50": r.p50, "p90": r.p90}
         for r in session.execute(
             select(WeeklyProjection).where(
@@ -88,6 +89,11 @@ def _load_projections(session, season: int, week: int, player_ids: set):
             )).scalars()
     ])
     if not weekly.empty:
+        # forward (weekly_fwd_*, live-serving) rows win over OOF (weekly_v1.*)
+        weekly["_fwd"] = weekly["model_version"].str.startswith("weekly_fwd")
+        weekly = (weekly.sort_values("_fwd")
+                  .drop_duplicates("player_id", keep="last")
+                  .drop(columns=["_fwd", "model_version"]))
         return weekly, "weekly"
 
     # Fallback: season projections (scale to per-game)

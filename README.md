@@ -1,6 +1,6 @@
 # FantasyForecast
 
-PPR fantasy football draft assistant. Pooled LightGBM quantile model (P10/P50/P90) + VONA-based draft recommender.
+PPR fantasy football draft assistant. Pooled LightGBM quantile model (P10/P50/P90) + VONA-based draft recommender, plus a weekly start/sit optimizer for the season itself.
 
 ## Stack
 
@@ -51,6 +51,10 @@ python scripts/build_labels.py
 python scripts/build_features.py --start 2012 --end 2026
 python scripts/train_projection.py
 python scripts/run_benchmark.py --with-sim
+# weekly grain (start/sit)
+python scripts/build_weekly_data.py --start 2017 --end 2026
+python scripts/train_weekly_projection.py
+python scripts/run_weekly_benchmark.py --start 2017
 ```
 
 ## Live Draft
@@ -96,6 +100,37 @@ At each of your picks it shows the **top 10** candidates with a **FIT** score an
 - **wait** — the VONA wait term: the expected VOR of the best same-position player surviving to your next pick. Low wait = scarce position (grab now); high wait = deep position (safe to wait). Same value for all players at the same position.
 - **read** — auto-classifies the spread: _CLEAR #1_ (leads #2 by ≥1.0), _TOSS-UP_ (top 10 within 0.5 → pick your preference), or a _slight edge_ in between.
 - **runs** — how many players at each position the market expects to go before your next pick (`!` = 0–1 left, i.e. that position is running out).
+
+## Weekly Start/Sit ("Who Should I Start?")
+
+Once the season starts, the weekly model answers the other hard question: who goes in the lineup this week. Two commands per week:
+
+```bash
+python scripts/project_week.py --season 2026 --week 5          # 1. project the upcoming week
+python scripts/start.py --season 2026 --week 5 --roster my_team.yaml   # 2. optimize the lineup
+```
+
+`project_week.py` builds as-of-kickoff features for the target week (rolling in-season stats, opponent DvP, Vegas lines, season-P50 prior), trains on all strictly-prior weeks, and writes forward projections (`weekly_fwd_v1.*`). `start.py` then solves the lineup as a small ILP — exact slot assignment, FLEX included — and prints START/BENCH verdicts with matchup grades.
+
+Your roster lives in a YAML file:
+
+```yaml
+season: 2026
+roster:
+  - { name: Josh Allen, position: QB, team: BUF }
+  - { name: Bijan Robinson, position: RB, team: ATL }
+  - { name: Amon-Ra St. Brown, position: WR, team: DET }
+  - { name: Travis Kelce, position: TE, team: KC, status: questionable }
+  # ... status IR/OUT excludes a player from the lineup
+```
+
+Options:
+
+- `--strategy safe|balanced|upside` — maximize P10 (floor), P50 (median, default), or P90 (ceiling). Chasing a comeback? `upside`. Protecting a lead? `safe`.
+- `compare "Player A" vs "Player B"` — head-to-head: quantiles, matchup grade, and a verdict (< 1 pt median gap is called a TOSS-UP rather than a fake edge).
+- Falls back to season projections (flagged as such) if weekly projections don't exist for that week.
+
+**Two-layer model**: the season P50 projection enters the weekly model as a prior feature; the weekly GBM learns how far to adjust it given in-season context. Same pooled quantile architecture, same rearrangement monotonicity, split-conformal calibration by position bucket. All backward-looking features pass through `leakage_guard.prior_weeks()` — nothing from the target week or later ever enters the matrix.
 
 ## Architecture
 
@@ -155,6 +190,17 @@ Draft simulation: our recommender vs 11 bots drafting by ADP, on `SIM_ELIGIBLE` 
 
 The recommender — not just the engine — beats the market. Adding the `team_context` market feature lifted this tier (mean edge +3.97 → +4.74, win rate 25 → 28 of 35, p 0.0014 → 0.000277) while leaving Tier-1 flat within its CI. Down years like 2024 still pull the mean, but the paired edge is robust.
 
+### Weekly — lineup benchmark (points left on bench)
+
+Simulated rosters (snake-draft, averaged over early/mid/late draft slots), lineups set each week from OOF weekly projections, then scored against what actually happened:
+
+| Metric                    | Result | Target | Gate     |
+| ------------------------- | ------ | ------ | -------- |
+| Mean pts left on bench    | 18.38  | < 20.0 | **PASS** |
+| Optimal starter hit rate  | 67.5%  | —      | —        |
+
+Weekly OOF interval coverage sits at 0.798–0.812 per position bucket against the 0.80 nominal, under leave-one-fold-out calibration (each season calibrated only on the *other* seasons, so reported coverage can't flatter itself).
+
 ## Data Sources
 
 - [nflverse](https://www.nflverse.com/) — play-by-play, rosters, combine, draft picks, **Week-1 betting lines** (`total_line`/`spread_line`, 100% coverage 2012–2025) for team scoring context
@@ -171,6 +217,8 @@ The recommender — not just the engine — beats the market. Adding the `team_c
 - **VOR** — Value Over Replacement: a player's projected value minus a freely-available "replacement" player at his position (the first one who doesn't earn a starting slot).
 - **VONA** — Value Of Not Available: VOR _now_ minus the expected value of the best same-position player still available at your _next_ pick. Encodes "take the scarce position now, wait on the deep one."
 - **FIT** — the draft UI's per-player number: a player's VONA score at your current pick. Higher = better fit for your roster right now; the spread across the top 10 shows whether one pick clearly dominates or the choices are about equal.
+- **DvP** — Defense vs Position: how many fantasy points a defense has allowed to each position so far this season. Drives the weekly matchup grade (A/B/C).
+- **ILP** — Integer Linear Program: the exact optimizer behind start/sit. Assigns each rostered player to a starting slot (or bench) to maximize the chosen quantile's total, with FLEX eligibility as a constraint.
 
 **Model terms**
 
