@@ -23,52 +23,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import pandas as pd
 
 from src.config import load_config
-from src.db.loaders import load_adp_df, load_players_df, load_projections_df
-from src.db.session import session_scope
+from src.recommender.board import PROJ_COLS, load_board
 from src.recommender.draft_state_source import ManualDraftSource, adp_auto_advance
 from src.recommender.recommend import build_replacement_from_projections, recommend
 from src.recommender.roster_state import RosterState
-
-
-def _compute_bye_weeks(season: int) -> dict:
-    """Return {team_abbr: bye_week_number} from nflreadpy schedules. Empty dict on failure."""
-    try:
-        from src.ingest.sources import load_schedules
-        sched = load_schedules([season])
-        if sched.empty:
-            return {}
-        if "game_type" in sched.columns:
-            sched = sched[sched["game_type"] == "REG"]
-        all_weeks = set(pd.to_numeric(sched["week"], errors="coerce").dropna().astype(int))
-        teams = set(sched["home_team"].dropna()) | set(sched["away_team"].dropna())
-        bye: dict = {}
-        for team in teams:
-            played = (
-                set(pd.to_numeric(sched.loc[sched["home_team"] == team, "week"],
-                                  errors="coerce").dropna().astype(int))
-                | set(pd.to_numeric(sched.loc[sched["away_team"] == team, "week"],
-                                    errors="coerce").dropna().astype(int))
-            )
-            missing = sorted(all_weeks - played)
-            if missing:
-                bye[team] = missing[0]
-        return bye
-    except Exception as exc:
-        print(f"warning: bye weeks unavailable ({exc})", file=sys.stderr)
-        return {}
-
-
-def _load_board(season: int, cfg) -> pd.DataFrame:
-    with session_scope() as session:
-        proj = load_projections_df(session, season)[
-            ["player_id", "position", "p10", "p50", "p90"]]
-        adp = load_adp_df(session, cfg, season)[["player_id", "adp", "adp_stdev"]]
-        names = load_players_df(session)
-    board = proj.merge(adp, on="player_id", how="left").merge(names, on="player_id", how="left")
-    bye_map = _compute_bye_weeks(season)
-    if bye_map:
-        board["bye_week"] = board["team"].map(bye_map).where(board["team"].notna())
-    return board
 
 
 def _print_recs(recs: pd.DataFrame, names: dict) -> None:
@@ -159,7 +117,7 @@ def main() -> None:
     state_path = pathlib.Path(
         args.state_file or f"draft_state_{args.season}_slot{args.position}.json")
 
-    board = _load_board(args.season, cfg)
+    board = load_board(args.season, cfg)
     if board.empty:
         raise SystemExit("No projections/ADP found. Run the pipeline (M0-M3) first.")
     names = dict(zip(board["player_id"], board["name"]))
@@ -240,9 +198,7 @@ def main() -> None:
     print(f"Draft loaded: season {args.season}, slot {args.position}/{cfg.teams}, "
           f"{cfg.roster.rounds} rounds. My picks: {state.my_picks}")
     print("Commands: <name> | me <name> | go | skip | undo | roster | board | quit")
-    _ALL_PROJ_COLS = ["player_id", "position", "p10", "p50", "p90",
-                      "adp", "adp_stdev", "team", "bye_week"]
-    proj_cols = [c for c in _ALL_PROJ_COLS if c in board.columns]
+    proj_cols = [c for c in PROJ_COLS if c in board.columns]
     while state.remaining_picks() > 0:
         avail_board = board[proj_cols][~board["player_id"].isin(state.drafted)].copy()
         recs = recommend(avail_board, state, replacement, cfg=cfg, top_n=10)
