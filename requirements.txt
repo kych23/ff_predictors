@@ -1,3 +1,5 @@
+# Loose ranges here; requirements.lock pins the exact validated versions
+# (pip install -r requirements.lock to reproduce a known-good environment).
 # Core data + modeling (DrafterSpec.md §4.10)
 nflreadpy
 pandas
@@ -21,7 +23,9 @@ httpx
 # nflreadpy's pydantic v2 requirement. New .env key: CFBD_API_KEY (CFBD is not
 # anonymous), alongside DATABASE_URL.
 
-# API/frontend retired for v1 (§4.9); kept optional — they return with the frontend.
-# fastapi>=0.111
-# uvicorn[standard]>=0.30
 # xgboost was the retired weekly model; LightGBM quantile GBM replaces it.
+
+# HTTP API (api/) — draft sessions, players, recommendations. httpx (client
+# for the API's own tests) already listed above as a shared ingest dependency.
+fastapi
+uvicorn[standard]
