@@ -2,14 +2,23 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api.draft_service import DraftNotFound, InvalidPick
 from api.routers import draft, players
+from api.settings import allowed_origins
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="FantasyForecast API")
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins(),
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.exception_handler(DraftNotFound)
     async def _not_found(request: Request, exc: DraftNotFound):

@@ -110,6 +110,12 @@ python scripts/project_week.py --season 2026 --week 5          # 1. project the 
 python scripts/start.py --season 2026 --week 5 --roster my_team.yaml   # 2. optimize the lineup
 ```
 
+Or refresh data + project in one shot (run Tuesdays, after the previous week's stats land):
+
+```bash
+bash scripts/update_week.sh 2026 5    # re-seed stats → rebuild weekly grain → project week 5
+```
+
 `project_week.py` builds as-of-kickoff features for the target week (rolling in-season stats, opponent DvP, Vegas lines, season-P50 prior), trains on all strictly-prior weeks, and writes forward projections (`weekly_fwd_v1.*`). `start.py` then solves the lineup as a small ILP — exact slot assignment, FLEX included — and prints START/BENCH verdicts with matchup grades.
 
 Your roster lives in a YAML file:
@@ -200,6 +206,26 @@ Simulated rosters (snake-draft, averaged over early/mid/late draft slots), lineu
 | Optimal starter hit rate  | 67.5%  | —      | —        |
 
 Weekly OOF interval coverage sits at 0.798–0.812 per position bucket against the 0.80 nominal, under leave-one-fold-out calibration (each season calibrated only on the *other* seasons, so reported coverage can't flatter itself).
+
+## API
+
+FastAPI service exposing the draft recommender (backend for the web draft room).
+
+```bash
+venv/bin/uvicorn api.main:app --reload --port 8000
+```
+
+- `GET /health` — liveness
+- `GET /players?season=2026` — draft board (projections + ADP + names)
+- `POST /draft/sessions` `{"season": 2026, "draft_position": 4}` — start a session
+- `GET /draft/sessions/{id}` — full state (picks, roster, whose turn)
+- `POST /draft/sessions/{id}/picks` `{"player_id": "..."}` or `{"skip": true}` — record a pick
+- `POST /draft/sessions/{id}/undo` — pop the last command
+- `GET /draft/sessions/{id}/recommendations?top_n=10` — ranked VONA board
+
+Sessions are event-sourced in the `draft_sessions` table (same history format as
+the CLI save files); state is rebuilt by replay on every read.
+CORS origins via `ALLOWED_ORIGINS` (default `http://localhost:3000`).
 
 ## Data Sources
 

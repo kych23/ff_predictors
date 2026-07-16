@@ -66,3 +66,8 @@ def test_error_mapping(client):
     assert client.post(f"/draft/sessions/{sid}/picks",
                        json={"player_id": "GHOST"}).status_code == 400
     assert client.post(f"/draft/sessions/{sid}/picks", json={}).status_code == 400
+
+
+def test_cors_allows_frontend_origin(client):
+    r = client.get("/health", headers={"Origin": "http://localhost:3000"})
+    assert r.headers.get("access-control-allow-origin") == "http://localhost:3000"
