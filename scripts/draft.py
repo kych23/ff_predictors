@@ -22,7 +22,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import pandas as pd
 
-from api.replay import apply_event, replay_history
+from api.replay import apply_event
 from src.config import load_config
 from src.recommender.board import PROJ_COLS, load_board
 from src.recommender.draft_state_source import ManualDraftSource, adp_auto_advance

@@ -27,6 +27,7 @@ class InvalidPick(Exception):
 
 
 _BOARD_CACHE: dict[int, pd.DataFrame] = {}
+_REPLACEMENT_CACHE: dict[int, object] = {}
 
 
 def get_cached_board(season: int, cfg: Optional[LeagueConfig] = None) -> pd.DataFrame:
@@ -36,13 +37,18 @@ def get_cached_board(season: int, cfg: Optional[LeagueConfig] = None) -> pd.Data
     return _BOARD_CACHE[season]
 
 
+def get_cached_replacement(season: int, board: pd.DataFrame, cfg: LeagueConfig) -> object:
+    if season not in _REPLACEMENT_CACHE:
+        _REPLACEMENT_CACHE[season] = build_replacement_from_projections(board, cfg=cfg)
+    return _REPLACEMENT_CACHE[season]
+
+
 class DraftService:
     def __init__(self, db, cfg: LeagueConfig,
                  board_for: Callable[[int], pd.DataFrame]):
         self.db = db
         self.cfg = cfg
         self.board_for = board_for
-        self._replacement_cache: dict[int, object] = {}
 
     # --- session lifecycle ---
 
@@ -140,10 +146,7 @@ class DraftService:
     def recommendations(self, session_id: str, top_n: int = 10) -> list[dict]:
         sess = self._get(session_id)
         state, board = self._rebuild(sess)
-        if sess.season not in self._replacement_cache:
-            self._replacement_cache[sess.season] = \
-                build_replacement_from_projections(board, cfg=self.cfg)
-        replacement = self._replacement_cache[sess.season]
+        replacement = get_cached_replacement(sess.season, board, self.cfg)
         proj_cols = [c for c in PROJ_COLS if c in board.columns]
         avail = board[proj_cols][~board["player_id"].isin(state.drafted)].copy()
         recs = recommend(avail, state, replacement, cfg=self.cfg, top_n=top_n)
