@@ -22,6 +22,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import pandas as pd
 
+from api.replay import apply_event, replay_history
 from src.config import load_config
 from src.recommender.board import PROJ_COLS, load_board
 from src.recommender.draft_state_source import ManualDraftSource, adp_auto_advance
@@ -132,23 +133,9 @@ def main() -> None:
     history: list = []
 
     def _apply_event(ev: list) -> None:
-        kind = ev[0]
-        if kind == "skip":
-            token = ev[1]
-            state.drafted.add(token)
-            src.drafted.add(token)
-            return
-        pid, mine = ev[1], ev[2]
-        src.drafted.add(pid)
-        prow = board.loc[board["player_id"] == pid]
-        if prow.empty:
-            state.record_pick(pid, None, mine=mine)
-            return
-        prow = prow.iloc[0]
-        team_val = prow["team"] if "team" in board.columns and pd.notna(prow.get("team")) else None
-        bye_val = (int(prow["bye_week"]) if "bye_week" in board.columns
-                   and pd.notna(prow.get("bye_week")) else None)
-        state.record_pick(pid, prow["position"], mine=mine, team=team_val, bye_week=bye_val)
+        token = ev[1]
+        src.drafted.add(token)
+        apply_event(state, board, ev)
 
     def _save() -> None:
         data = {"season": args.season, "position": args.position, "history": history}
