@@ -89,15 +89,22 @@ class IntervalCalibrator:
         return float(np.quantile(scores, q))
 
     def transform(self, preds: pd.DataFrame, buckets: pd.Series) -> pd.DataFrame:
+        """Widen intervals per bucket. ``buckets`` aligns to ``preds`` by row
+        order (vectorized — safe under duplicate index labels)."""
+        if len(buckets) != len(preds):
+            raise ValueError(
+                f"buckets length {len(buckets)} != preds length {len(preds)}")
         out = preds.copy()
-        for i, bucket in buckets.items():
-            ls, us = self.scales.get(bucket, self.scales.get(GLOBAL, (1.0, 1.0)))
-            p50 = out.at[i, "p50"]
-            out.at[i, "p10"] = p50 - ls * (p50 - out.at[i, "p10"])
-            out.at[i, "p90"] = p50 + us * (out.at[i, "p90"] - p50)
+        default = self.scales.get(GLOBAL, (1.0, 1.0))
+        scale_of = {b: self.scales.get(b, default) for b in buckets.unique()}
+        ls = np.array([scale_of[b][0] for b in buckets], dtype=float)
+        us = np.array([scale_of[b][1] for b in buckets], dtype=float)
+        p10 = out["p10"].to_numpy(dtype=float)
+        p50 = out["p50"].to_numpy(dtype=float)
+        p90 = out["p90"].to_numpy(dtype=float)
+        widened = np.column_stack([p50 - ls * (p50 - p10), p50, p50 + us * (p90 - p50)])
         # re-assert monotonicity after scaling
-        vals = np.sort(out[["p10", "p50", "p90"]].to_numpy(), axis=1)
-        out[["p10", "p50", "p90"]] = vals
+        out[["p10", "p50", "p90"]] = np.sort(widened, axis=1)
         return out
 
 

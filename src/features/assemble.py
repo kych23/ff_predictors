@@ -50,6 +50,26 @@ def _season_length(season: int) -> int:
     return 17 if season >= 2021 else 16
 
 
+def _reg_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Regular-season rows only — labels are REG-only (run_ingest), so prior
+    production must be too, or playoff-team players get skewed rate features.
+
+    Falls back to a week cutoff (18 weeks from 2021, 17 before) for sources
+    without a season/game type column (e.g. ff_opportunity)."""
+    if df is None or df.empty:
+        return df
+    if "season_type" in df.columns:
+        return df[df["season_type"] == "REG"].copy()
+    if "game_type" in df.columns:
+        return df[df["game_type"] == "REG"].copy()
+    if "week" in df.columns and "season" in df.columns:
+        wk = pd.to_numeric(df["week"], errors="coerce")
+        sn = pd.to_numeric(df["season"], errors="coerce")
+        reg_weeks = np.where(sn >= 2021, 18, 17)
+        return df[wk.isna() | (wk <= reg_weeks)].copy()
+    return df
+
+
 def assemble_season(
     target_season: int,
     frames: Dict[str, pd.DataFrame],
@@ -72,10 +92,10 @@ def assemble_season(
     players = frames["players"]
     id_map = frames.get("id_map", pd.DataFrame())
 
-    # --- leakage-filter backward-looking sources to seasons < Y ---
-    stats_prior = lg.prior_seasons(frames.get("stats", pd.DataFrame()), Y)
-    snaps_prior = lg.prior_seasons(frames.get("snaps", pd.DataFrame()), Y)
-    opp_prior = lg.prior_seasons(frames.get("opp", pd.DataFrame()), Y)
+    # --- leakage-filter backward-looking sources to seasons < Y, REG only ---
+    stats_prior = lg.prior_seasons(_reg_rows(frames.get("stats", pd.DataFrame())), Y)
+    snaps_prior = lg.prior_seasons(_reg_rows(frames.get("snaps", pd.DataFrame())), Y)
+    opp_prior = lg.prior_seasons(_reg_rows(frames.get("opp", pd.DataFrame())), Y)
     lg.assert_no_future(stats_prior, Y, where="prior_production stats")
     lg.assert_no_future(snaps_prior, Y, where="prior_production snaps")
     lg.assert_no_future(opp_prior, Y, where="prior_production opp")

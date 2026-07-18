@@ -154,5 +154,7 @@ class DraftService:
             return []
         names = dict(zip(board["player_id"], board["name"]))
         out = recs.assign(name=recs["player_id"].map(names))
-        out = out.where(pd.notna(out), None)     # NaN -> None for JSON
+        # astype(object) first: None cannot survive in a float64 column (pandas
+        # re-coerces it to NaN), which then breaks JSON serialization / pydantic.
+        out = out.astype(object).where(pd.notna(out), None)   # NaN -> None for JSON
         return out.to_dict(orient="records")

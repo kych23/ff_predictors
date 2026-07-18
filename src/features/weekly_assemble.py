@@ -211,6 +211,15 @@ def _load_weekly_frames(load_seasons: list, session) -> Dict[str, pd.DataFrame]:
              "p50": r.p50, "model_version": r.model_version}
             for r in proj_rows
         ])
+        # pin the season prior to the current config's model; the lexicographic
+        # fallback only fires when that version was never trained (stale table).
+        current_mv = load_config().model_version
+        if (pdf["model_version"] == current_mv).any():
+            pdf = pdf[pdf["model_version"] == current_mv]
+        else:
+            logger.warning(
+                "no projections for current model_version %s — falling back to "
+                "latest by string sort (retrain to refresh season priors)", current_mv)
         pdf = pdf.sort_values("model_version").drop_duplicates(
             ["player_id", "season"], keep="last")
         projections = pdf.rename(columns={"p50": "season_p50"})[

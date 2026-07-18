@@ -27,12 +27,19 @@ from .report import PairedTest, paired_test
 def _bot_pick(board: pd.DataFrame, drafted: set, slot_fill: Dict[str, int],
               cfg: LeagueConfig) -> Optional[str]:
     """ADP bot: lowest-ADP available player that fits any open slot (pure/flex/bench)."""
-    avail = board[~board["player_id"].isin(drafted)].dropna(subset=["adp"]).sort_values("adp")
+    undrafted = board[~board["player_id"].isin(drafted)]
+    avail = undrafted.dropna(subset=["adp"]).sort_values("adp")
     for _, row in avail.iterrows():
         pos = row["position"]
         if _has_open_slot(pos, slot_fill, cfg):
             return row["player_id"]
-    return avail.iloc[0]["player_id"] if not avail.empty else None
+    if not avail.empty:
+        return avail.iloc[0]["player_id"]
+    # ADP pool exhausted (thin ADP coverage): fall back to best-projected
+    # undrafted player so the bot's roster never silently comes up short.
+    if not undrafted.empty:
+        return undrafted.sort_values("p50", ascending=False).iloc[0]["player_id"]
+    return None
 
 
 def _has_open_slot(position: str, slot_fill: Dict[str, int], cfg: LeagueConfig) -> bool:

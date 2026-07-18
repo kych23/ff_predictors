@@ -10,11 +10,14 @@ The wall: this module uses ADP only for survival/timing (recommender side, §4.0
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import pandas as pd
 
 from src.config import LeagueConfig, load_config
+
+logger = logging.getLogger(__name__)
 
 from .quantile_schedule import round_to_alpha, value_vector_at_alpha
 from .replacement import ReplacementLevels, compute_replacement
@@ -131,13 +134,37 @@ def recommend(
     remaining = roster.remaining_picks()
     unfilled = roster.total_unfilled_mandatory()
     scored["forced_completion"] = False
-    if remaining <= unfilled:
-        # restrict to players that fill a still-needed mandatory starter slot
-        needed_positions = {p for p in cfg.roster.modeled_positions if roster.needs_starter(p)}
-        if needed_positions:
-            mask = scored["position"].isin(needed_positions)
+    needed_positions = {p for p in cfg.roster.modeled_positions if roster.needs_starter(p)}
+    # Supply-aware urgency: a still-needed position whose remaining player pool
+    # could be drained by opponents before my next pick must be taken NOW —
+    # waiting on "remaining <= unfilled" alone can strand a starter slot with an
+    # empty position pool (e.g. a QB run emptying the board by the late rounds).
+    opp_picks_before_next = (next_pick - cur - 1) if next_pick is not None else 0
+    scarce = {p for p in needed_positions
+              if int((scored["position"] == p).sum()) <= max(opp_picks_before_next, 0)}
+    if remaining <= unfilled and needed_positions:
+        # endgame: every remaining pick must fill a mandatory starter slot
+        mask = scored["position"].isin(needed_positions)
+        scored.loc[mask, "forced_completion"] = True
+        if mask.any():
+            scored = scored[mask]
+        else:
+            logger.warning(
+                "roster-completion: needed position(s) %s have no available "
+                "players — roster cannot be completed legally",
+                sorted(needed_positions))
+    elif scarce:
+        # mid-draft scarcity trip: force only the at-risk positions, and only
+        # when that actually narrows the board (a toy/thin board where every
+        # position is at risk constrains nothing and shouldn't flag).
+        mask = scored["position"].isin(scarce)
+        if mask.any() and not mask.all():
             scored.loc[mask, "forced_completion"] = True
-            scored = scored[mask] if mask.any() else scored
+            scored = scored[mask]
+        elif not mask.any():
+            logger.warning(
+                "roster-completion: needed position(s) %s have no available "
+                "players — roster cannot be completed legally", sorted(scarce))
 
     scored = scored.assign(draft_round=rnd, target_quantile=alpha)
     return scored.head(top_n).reset_index(drop=True)

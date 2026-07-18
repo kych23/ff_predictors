@@ -11,11 +11,14 @@ recommender's risk math (Chernozhukov et al. 2010, §4.6.1).
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, List
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 try:
     import lightgbm as lgb
@@ -35,6 +38,7 @@ DEFAULT_PARAMS = {
     "colsample_bytree": 0.8,
     "reg_alpha": 0.1,
     "reg_lambda": 1.0,
+    "random_state": 42,   # pin bagging/feature-fraction seeds for reproducible retrains
     "verbose": -1,
 }
 
@@ -52,6 +56,9 @@ class QuantileGBM:
     params: dict = field(default_factory=lambda: dict(DEFAULT_PARAMS))
     models: Dict[float, object] = field(default_factory=dict)
     feature_names: List[str] = field(default_factory=list)
+    # training category levels per categorical column; predict() realigns serving
+    # frames to these so LightGBM's category codes can never silently permute.
+    categories: Dict[str, list] = field(default_factory=dict)
 
     def fit(self, X: pd.DataFrame, y: pd.Series, *,
             X_val: pd.DataFrame | None = None,
@@ -68,6 +75,15 @@ class QuantileGBM:
             raise ImportError("lightgbm is required to train the projection engine")
         self.feature_names = list(X.columns)
         cat = [c for c in X.columns if str(X[c].dtype) == "category"]
+        self.categories = {c: list(X[c].cat.categories) for c in cat}
+        if X_val is not None:
+            # align holdout category levels to training's so the ES eval and the
+            # train+holdout refit share one code space (concat of mismatched
+            # categoricals silently degrades to object dtype).
+            X_val = X_val.copy()
+            for c in cat:
+                if c in X_val.columns:
+                    X_val[c] = pd.Categorical(X_val[c], categories=self.categories[c])
 
         use_early_stop = True
         if X_val is None or y_val is None:
@@ -115,7 +131,13 @@ class QuantileGBM:
 
     def predict(self, X: pd.DataFrame) -> pd.DataFrame:
         """Return a DataFrame with monotonic p10/p50/p90 columns (rearranged)."""
+        missing = [c for c in self.feature_names if c not in X.columns]
+        if missing:
+            logger.warning("predict: %d training feature(s) absent from serving "
+                           "frame, filled NaN: %s", len(missing), missing)
         X = X.reindex(columns=self.feature_names)
+        for c, cats in self.categories.items():
+            X[c] = pd.Categorical(X[c], categories=cats)
         raw = np.column_stack([self.models[q].predict(X) for q in self.quantiles])
         ordered = rearrange_quantiles(raw)
         cols = [QUANTILE_NAMES[q] for q in sorted(self.quantiles)]

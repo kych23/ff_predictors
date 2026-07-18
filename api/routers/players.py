@@ -12,4 +12,6 @@ router = APIRouter()
 def list_players(season: int, board_for=Depends(get_board_for)):
     import pandas as pd
     board = board_for(season)
-    return board.where(pd.notna(board), None).to_dict(orient="records")
+    # astype(object) first: None cannot live in a float64 column (pandas coerces
+    # it back to NaN), which then fails pydantic's Optional[int] bye_week.
+    return board.astype(object).where(pd.notna(board), None).to_dict(orient="records")

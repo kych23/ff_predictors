@@ -98,6 +98,13 @@ URI, port 5432 — direct connection is IPv6-only and fails on IPv4 Macs) and
   (`modeled_positions: [QB, RB, WR, TE]`).
 - Known accepted skew: weekly `season_p50` feature is OOF at train time but
   full-model at serve time (documented in `weekly_train.py`).
+- Data-version drift (accepted): `snapshot_id` freezes label-source box scores
+  and ADP, but snap counts / schedules / depth charts are read live from
+  nflreadpy and can be retroactively corrected upstream. Package versions are
+  pinned in `requirements.lock` (`pip freeze` of the validated env).
+- In-season weekly cadence: `bash scripts/update_week.sh SEASON WEEK` (full
+  re-seed + weekly rebuild + project) — partial-season seeds would orphan
+  training features, since loaders filter by snapshot_id.
 
 ## Change checklists
 
