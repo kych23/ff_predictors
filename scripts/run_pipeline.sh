@@ -45,8 +45,13 @@ echo "[7/8] Training weekly model + OOF projections..."
 python scripts/train_weekly_projection.py
 
 echo ""
-echo "[8/8] Running weekly lineup benchmark..."
+echo "[8/9] Running weekly lineup benchmark..."
 python scripts/run_weekly_benchmark.py --start "${WEEKLY_START}"
+
+echo ""
+echo "[9/9] Publishing serving subset to the serving DB (Supabase)..."
+# No-op when RESEARCH_DATABASE_URL is unset (single-DB setup): research == serving.
+python scripts/publish_serving.py --wf-season "${DRAFT_YEAR}"
 
 echo ""
 echo "=========================================="
