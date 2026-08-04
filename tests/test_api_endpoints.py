@@ -68,6 +68,15 @@ def test_error_mapping(client):
     assert client.post(f"/draft/sessions/{sid}/picks", json={}).status_code == 400
 
 
+def test_bot_pick_endpoint(client):
+    r = client.post("/draft/sessions", json={"season": 2026, "draft_position": 2})
+    sid = r.json()["session_id"]
+    r = client.post(f"/draft/sessions/{sid}/bot-pick")
+    assert r.status_code == 200
+    assert r.json()["picks"][0]["mine"] is False
+    assert r.json()["picks"][0]["player_id"] is not None
+
+
 def test_cors_allows_frontend_origin(client):
     r = client.get("/health", headers={"Origin": "http://localhost:3000"})
     assert r.headers.get("access-control-allow-origin") == "http://localhost:3000"

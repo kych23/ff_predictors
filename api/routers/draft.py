@@ -34,6 +34,11 @@ def undo(session_id: str, svc: DraftService = Depends(get_service)):
     return svc.undo(session_id)
 
 
+@router.post("/{session_id}/bot-pick", response_model=StateOut)
+def bot_pick(session_id: str, svc: DraftService = Depends(get_service)):
+    return svc.bot_pick(session_id)
+
+
 @router.get("/{session_id}/recommendations", response_model=list[RecommendationOut])
 def recommendations(session_id: str, top_n: int = 10,
                     svc: DraftService = Depends(get_service)):

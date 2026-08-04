@@ -92,3 +92,22 @@ def test_recommendations_shape_and_availability(svc):
                           "forced_completion"}
     scores = [r["vona_score"] for r in recs]
     assert scores == sorted(scores, reverse=True)
+
+
+def test_bot_pick_records_opponent_by_adp(svc):
+    s = svc.create_session(season=2026, draft_position=2)  # pick 1 is an opponent
+    st = svc.bot_pick(s.session_id)
+    assert len(st["picks"]) == 1
+    assert st["picks"][0]["mine"] is False
+    assert st["picks"][0]["player_id"] is not None
+    assert st["my_roster"] == []
+    assert st["current_overall_pick"] == 2
+
+
+def test_bot_pick_never_duplicates(svc):
+    s = svc.create_session(season=2026, draft_position=1)
+    svc.record_pick(s.session_id, player_id="P0031")  # my pick
+    st = svc.bot_pick(s.session_id)                     # bot takes best available by adp
+    ids = [p["player_id"] for p in st["picks"]]
+    assert len(ids) == len(set(ids))
+    assert "P0031" not in ids[1:]

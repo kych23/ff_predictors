@@ -141,6 +141,23 @@ class DraftService:
             self.db.commit()
         return self.state(session_id)
 
+    def bot_pick(self, session_id: str) -> dict:
+        """Advance one opponent turn using the ADP-bot heuristic (demo mode).
+
+        A full bench keeps every position slot open, so an empty slot_fill gives
+        the bot 'best available by ADP that fits any open slot' semantics.
+        """
+        from src.benchmark.draft_sim import _bot_pick
+        sess = self._get(session_id)
+        state, board = self._rebuild(sess)
+        slot_fill = {s: 0 for s in self.cfg.roster.slots}
+        pid = _bot_pick(board, state.drafted, slot_fill, self.cfg)
+        if pid is None:
+            raise InvalidPick("no players left for bot to draft")
+        sess.history = sess.history + [[["pick", pid, False]]]
+        self.db.commit()
+        return self.state(session_id)
+
     # --- recommendations ---
 
     def recommendations(self, session_id: str, top_n: int = 10) -> list[dict]:
