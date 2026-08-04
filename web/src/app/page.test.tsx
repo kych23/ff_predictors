@@ -2,8 +2,10 @@ import { render, screen } from "@testing-library/react";
 import { it, expect } from "vitest";
 import Home from "./page";
 
-it("links to the demo and the live draft", () => {
+it("links to the connect flow", () => {
   render(<Home />);
-  expect(screen.getByRole("link", { name: /try the demo/i })).toHaveAttribute("href", "/demo");
-  expect(screen.getByRole("link", { name: /live draft/i })).toHaveAttribute("href", "/draft");
+  expect(screen.getByRole("link", { name: /connect your league/i })).toHaveAttribute(
+    "href",
+    "/draft"
+  );
 });

@@ -25,14 +25,6 @@ describe("api client", () => {
     });
   });
 
-  it("botPick posts to the bot-pick route", async () => {
-    const spy = vi
-      .spyOn(globalThis, "fetch")
-      .mockReturnValue(okJson({ session_id: "abc" }) as ReturnType<typeof fetch>);
-    await api.botPick("abc");
-    expect(String(spy.mock.calls[0][0])).toContain("/draft/sessions/abc/bot-pick");
-  });
-
   it("raises ApiError with status + detail on non-2xx", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: false,

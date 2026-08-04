@@ -1,57 +1,49 @@
 "use client";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
-import type { PickBody } from "@/lib/types";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ApiError, api } from "@/lib/api";
 
 export function useDraftState(sessionId: string | null) {
-  const qc = useQueryClient();
   const enabled = !!sessionId;
-  const key = ["draft", sessionId];
+  const key = ["draft-sync", sessionId];
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
 
   const stateQuery = useQuery({
     queryKey: key,
     enabled,
-    queryFn: () => api.getState(sessionId as string),
-    refetchInterval: (q) => (q.state.data?.status === "active" ? 5000 : false),
+    queryFn: () => api.sync(sessionId as string),
+    // Stop once the WHOLE draft is done (overall pick count exceeds
+    // teams*rounds) — NOT once the connected user's own remaining_picks
+    // hits 0, which happens up to teams-1 picks early for every seat
+    // except the one that picks last. Keep retrying every 5s when there's
+    // no data yet (including a failed first sync) — only a CONFIRMED
+    // completed draft stops polling, never an error.
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      if (!d) return 5000;
+      return d.current_overall_pick <= d.teams * d.rounds ? 5000 : false;
+    },
   });
+
+  useEffect(() => {
+    if (stateQuery.isSuccess) setLastSyncedAt(Date.now());
+  }, [stateQuery.isSuccess, stateQuery.dataUpdatedAt]);
 
   const recsQuery = useQuery({
     queryKey: ["recs", sessionId, stateQuery.data?.current_overall_pick],
-    enabled,
+    enabled: enabled && !!stateQuery.data,
     queryFn: () => api.recommendations(sessionId as string, 10),
   });
 
-  const invalidate = () => {
-    qc.invalidateQueries({ queryKey: key });
-    qc.invalidateQueries({ queryKey: ["recs", sessionId] });
-  };
-
-  const pick = useMutation({
-    mutationFn: (body: PickBody) => api.recordPick(sessionId as string, body),
-    onSuccess: invalidate,
-  });
-  const skip = useMutation({
-    mutationFn: () => api.recordPick(sessionId as string, { skip: true }),
-    onSuccess: invalidate,
-  });
-  const undo = useMutation({
-    mutationFn: () => api.undo(sessionId as string),
-    onSuccess: invalidate,
-  });
-  const botPick = useMutation({
-    mutationFn: () => api.botPick(sessionId as string),
-    onSuccess: invalidate,
-  });
+  const isUpstreamError =
+    stateQuery.error instanceof ApiError && stateQuery.error.status === 502;
 
   return {
     state: stateQuery.data,
     recs: recsQuery.data,
     isLoading: stateQuery.isLoading,
     error: stateQuery.error,
-    pick,
-    skip,
-    undo,
-    botPick,
-    recsQuery,
+    isUpstreamError,
+    lastSyncedAt,
   };
 }

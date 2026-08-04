@@ -45,8 +45,10 @@ export const api = {
     }),
   undo: (id: string) =>
     req<DraftState>(`/draft/sessions/${id}/undo`, { method: "POST" }),
-  botPick: (id: string) =>
-    req<DraftState>(`/draft/sessions/${id}/bot-pick`, { method: "POST" }),
+  sync: (id: string) =>
+    req<DraftState>(`/draft/sessions/${id}/sync`, { method: "POST" }),
+  yahooLoginUrl: (sessionId: string, leagueKey: string) =>
+    `${BASE}/auth/yahoo/login?session_id=${sessionId}&league_key=${encodeURIComponent(leagueKey)}`,
   recommendations: (id: string, topN = 10) =>
     req<Recommendation[]>(`/draft/sessions/${id}/recommendations?top_n=${topN}`),
 };

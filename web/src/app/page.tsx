@@ -10,16 +10,10 @@ export default function Home() {
       </p>
       <div className="flex gap-4">
         <Link
-          href="/demo"
+          href="/draft"
           className="bg-emerald-600 text-white rounded px-5 py-2.5 font-medium"
         >
-          Try the demo
-        </Link>
-        <Link
-          href="/draft"
-          className="border border-slate-300 rounded px-5 py-2.5 font-medium"
-        >
-          Start a live draft
+          Connect your league
         </Link>
       </div>
     </main>

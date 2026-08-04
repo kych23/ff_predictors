@@ -12,14 +12,16 @@ function wrapper({ children }: { children: React.ReactNode }) {
 
 beforeEach(() => vi.restoreAllMocks());
 
-it("loads state and recommendations for a session", async () => {
-  vi.spyOn(api, "getState").mockResolvedValue({
+it("loads state and recommendations for a session via sync", async () => {
+  vi.spyOn(api, "sync").mockResolvedValue({
     session_id: "s",
     status: "active",
     is_my_turn: true,
     picks: [],
     my_roster: [],
     current_overall_pick: 1,
+    teams: 12,
+    rounds: 15,
   } as never);
   vi.spyOn(api, "recommendations").mockResolvedValue([
     { player_id: "P1", vona_score: 1 } as never,
@@ -27,10 +29,11 @@ it("loads state and recommendations for a session", async () => {
   const { result } = renderHook(() => useDraftState("s"), { wrapper });
   await waitFor(() => expect(result.current.state?.session_id).toBe("s"));
   await waitFor(() => expect(result.current.recs?.[0].player_id).toBe("P1"));
+  await waitFor(() => expect(result.current.lastSyncedAt).not.toBeNull());
 });
 
 it("is disabled with a null session", () => {
-  const getState = vi.spyOn(api, "getState");
+  const sync = vi.spyOn(api, "sync");
   renderHook(() => useDraftState(null), { wrapper });
-  expect(getState).not.toHaveBeenCalled();
+  expect(sync).not.toHaveBeenCalled();
 });

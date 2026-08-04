@@ -29,6 +29,12 @@ it("renders recs and fires onDraft with player_id", async () => {
   expect(onDraft).toHaveBeenCalledWith("P1");
 });
 
+it("renders without a Draft button when onDraft is omitted (read-only mode)", () => {
+  render(<RecommendationPanel recs={[rec({})]} min={0} max={30} />);
+  expect(screen.getByText("Star WR")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /draft/i })).not.toBeInTheDocument();
+});
+
 it("badges forced_completion picks", () => {
   render(
     <RecommendationPanel

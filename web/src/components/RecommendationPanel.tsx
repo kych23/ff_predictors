@@ -11,7 +11,7 @@ export function RecommendationPanel({
   recs: Recommendation[];
   min: number;
   max: number;
-  onDraft: (id: string) => void;
+  onDraft?: (id: string) => void;
 }) {
   if (!recs.length) return <p className="text-slate-500">No recommendations.</p>;
   return (
@@ -28,12 +28,14 @@ export function RecommendationPanel({
                 <span className="ml-2 text-xs bg-amber-200 rounded px-1">must fill slot</span>
               )}
             </div>
-            <button
-              onClick={() => onDraft(r.player_id)}
-              className="bg-emerald-600 text-white text-sm rounded px-3 py-1"
-            >
-              Draft
-            </button>
+            {onDraft && (
+              <button
+                onClick={() => onDraft(r.player_id)}
+                className="bg-emerald-600 text-white text-sm rounded px-3 py-1"
+              >
+                Draft
+              </button>
+            )}
           </div>
           <QuantileBar p10={r.p10} p50={r.p50} p90={r.p90} min={min} max={max} />
           <div className="flex justify-between text-xs text-slate-500">
