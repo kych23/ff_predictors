@@ -12,7 +12,7 @@ import pandas as pd
 
 from src.config import LeagueConfig
 from src.db.loaders import load_adp_df, load_players_df, load_projections_df
-from src.db.session import session_scope
+from src.db.session import serving_session_scope
 
 #: Columns recommend() consumes, in preference order; filter to what the board has.
 PROJ_COLS = ["player_id", "position", "p10", "p50", "p90",
@@ -48,7 +48,8 @@ def compute_bye_weeks(season: int) -> dict:
 
 
 def load_board(season: int, cfg: LeagueConfig) -> pd.DataFrame:
-    with session_scope() as session:
+    # serving engine (Supabase): board reads projections/adp/players at serve time
+    with serving_session_scope() as session:
         proj = load_projections_df(session, season)[
             ["player_id", "position", "p10", "p50", "p90"]]
         adp = load_adp_df(session, cfg, season)[["player_id", "adp", "adp_stdev"]]
