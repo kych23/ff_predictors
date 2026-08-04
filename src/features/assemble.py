@@ -1,10 +1,18 @@
 """Feature assembly — the single (player, Y) assembly point
 
-Joins prior-production, role-change, and rookie blocks for season ``Y``; attaches
+Joins prior-production and role-change blocks for season ``Y``; attaches
 ``age_at_season_start`` (explicit feature, §4.5 Age note), sets the row's position
 **as of season Y** and a ``position_changed`` flag (§4.0), enforces the as-of /
 leakage rule at this boundary, and emits the ``season_features`` rows (feature set
 as opaque JSONB).
+
+# REBUILD: rookie/college-derived features (draft capital, combine, college
+# production) were dropped here when src/features/rookies.py and
+# src/ingest/college.py were deleted in the monte-carlo strip (CFBD descoped).
+# `is_rookie` is still computed directly from rookie_year and is unaffected;
+# has_college_stats/is_udfa/has_combine now always default to 0 via the
+# existing flag-default loop below. Per the target architecture, rookie priors
+# return via ADP + NFL draft capital instead of CFBD college stats.
 
 All backward-looking sources are filtered through ``leakage_guard`` to seasons
 strictly before Y before any aggregation; preseason-Y artifacts (Week-1 depth chart,
@@ -26,7 +34,6 @@ from src.db.upsert_data import upsert_season_features
 from . import leakage_guard as lg
 from .prior_production import build_prior_production
 from .role_change import build_role_change
-from .rookies import build_rookie_features
 from .team_context import CTX_COLS, build_team_context
 
 logger = logging.getLogger(__name__)
@@ -77,7 +84,6 @@ def assemble_season(
     cfg: Optional[LeagueConfig] = None,
     as_of_date: Optional[dt.date] = None,
     pfr_to_gsis: Optional[Dict[str, str]] = None,
-    college: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """Assemble all feature blocks for one target season into season_features rows.
 
@@ -90,7 +96,6 @@ def assemble_season(
         as_of_date = dt.date(Y, 9, 1)  # safe pre-kickoff default if schedule absent
 
     players = frames["players"]
-    id_map = frames.get("id_map", pd.DataFrame())
 
     # --- leakage-filter backward-looking sources to seasons < Y, REG only ---
     stats_prior = lg.prior_seasons(_reg_rows(frames.get("stats", pd.DataFrame())), Y)
@@ -142,12 +147,6 @@ def assemble_season(
     # merge blocks
     df = base.merge(prior, on="player_id", how="left")
     df = df.merge(role, on="player_id", how="left")
-
-    rookies_block = build_rookie_features(rookie_ids, p, frames.get("combine", pd.DataFrame()),
-                                          id_map if not id_map.empty else
-                                          pd.DataFrame(columns=["gsis_id", "pfr_id"]),
-                                          college)
-    df = df.merge(rookies_block, on="player_id", how="left")
 
     # is_rookie
     df["is_rookie"] = df["player_id"].isin(set(rookie_ids))
@@ -227,8 +226,7 @@ def build_features_range(
 ) -> int:
     """Load sources, assemble features for [start, end], write season_features."""
     from src.ingest import sources
-    from src.ingest.college import build_college_features
-    from src.ingest.player_ids import build_college_bridge, build_id_map
+    from src.ingest.player_ids import build_id_map
 
     cfg = load_config(config_path)
     seasons = list(range(start, end + 1))
@@ -248,25 +246,10 @@ def build_features_range(
         "opp": sources.load_ff_opportunity([s for s in load_seasons if s >= 2006]),
         "depth": sources.load_depth_charts(seasons),
         "rosters": sources.load_rosters(load_seasons),
-        "combine": sources.load_combine(),
         # Week-1 betting lines for the TARGET seasons only (preseason-Y market context).
         "schedules": sources.load_schedules(seasons),
     }
     kickoffs = sources.week1_kickoff_dates(seasons)
-
-    # College block: built ONCE for every rookie in the range, keyed by gsis_id, then
-    # shared across seasons (assemble_season merges per-season rookies by player_id).
-    ry = pd.to_numeric(players.get("rookie_year"), errors="coerce")
-    rookie_seasons = {
-        str(pid): int(y)
-        for pid, y in zip(players["player_id"].astype(str), ry)
-        if pd.notna(y) and start <= y <= end
-    }
-    birth_dates = dict(zip(players["player_id"].astype(str), players.get("birth_date", pd.Series(dtype=object))))
-    college = build_college_features(rookie_seasons, build_college_bridge(), birth_dates=birth_dates)
-    n_college = int(college["has_college_stats"].fillna(0).sum()) if not college.empty else 0
-    logger.info("college features: %d rookies with real stats (of %d rookies)",
-                n_college, len(rookie_seasons))
 
     total = 0
     with session_scope() as session:
@@ -275,7 +258,7 @@ def build_features_range(
             as_of = (ko - dt.timedelta(days=cfg.backtest.as_of_offset_days)).date() \
                 if ko is not None else dt.date(Y, 9, 1)
             rows = assemble_season(Y, frames, cfg=cfg, as_of_date=as_of,
-                                   pfr_to_gsis=pfr_to_gsis, college=college)
+                                   pfr_to_gsis=pfr_to_gsis)
             if snapshot_id:
                 rows["snapshot_id"] = snapshot_id
             n = upsert_season_features(rows, session)

@@ -21,8 +21,6 @@ from src.config import load_config
 from src.db.init_db import init_db
 from src.db.session import session_scope
 from src.db.upsert_data import (
-    upsert_adp,
-    upsert_adp_coverage,
     upsert_ingest_snapshot,
     upsert_player_id_map,
     upsert_players,
@@ -30,7 +28,6 @@ from src.db.upsert_data import (
 )
 
 from . import sources
-from .adp import FFCClient, build_adp_season
 from .player_ids import build_crosswalk, fantasypros_lookup, name_lookup, name_position_lookup
 
 logger = logging.getLogger(__name__)
@@ -132,43 +129,16 @@ def run_ingest(
         session.commit()
 
         coverage = {}
+        # REBUILD: ADP source is moving from Fantasy Football Calculator to Yahoo
+        # (src/ingest/adp.py deleted in the monte-carlo strip). This block needs a
+        # Yahoo-based build_adp_season equivalent; fantasypros_lookup/name_lookup/
+        # name_position_lookup (src/ingest/player_ids.py) and upsert_adp/
+        # upsert_adp_coverage (src/db/upsert_data.py) are still there and were
+        # format-agnostic, so the new client should be able to reuse them.
         if with_adp:
-            fp_lk = fantasypros_lookup(crosswalk.id_map)
-            nm_lk = name_lookup(crosswalk.id_map)
-            np_lk = name_position_lookup(crosswalk.id_map)
-            ffc = FFCClient()
-            cov_rows = []
-            for season in seasons:
-                try:
-                    res = build_adp_season(
-                        season,
-                        fmt=cfg.adp.format,
-                        teams=cfg.adp.teams,
-                        fp_lookup=fp_lk,
-                        name_lookup=nm_lk,
-                        name_pos_lookup=np_lk,
-                        adp_min_ranking=cfg.adp.adp_min_ranking,
-                        adp_min_fullsim=cfg.adp_min_fullsim,
-                        snapshot_id=snapshot_id,
-                        client=ffc,
-                    )
-                except Exception as exc:  # noqa: BLE001 - one bad season must not abort
-                    logger.error("ADP fetch failed for %d: %s", season, exc)
-                    continue
-                upsert_adp(res.df, session)
-                cov_rows.append({
-                    "season": season, "format": res.format, "teams": res.teams,
-                    "n_players": res.n_players, "ranking_eligible": res.ranking_eligible,
-                    "sim_eligible": res.sim_eligible, "snapshot_id": snapshot_id,
-                })
-                coverage[str(season)] = {
-                    "n_players": res.n_players, "ranking_eligible": res.ranking_eligible,
-                    "sim_eligible": res.sim_eligible,
-                }
-                logger.info("ADP %d: %d players (rank=%s sim=%s)", season,
-                            res.n_players, res.ranking_eligible, res.sim_eligible)
-            if cov_rows:
-                upsert_adp_coverage(pd.DataFrame(cov_rows), session)
+            logger.warning(
+                "ADP ingestion skipped: FFC client removed pending Yahoo replacement "
+                "(see REBUILD note in src/ingest/run_ingest.py)")
 
         upsert_ingest_snapshot(
             {"snapshot_id": snapshot_id, "nflreadpy_version": sources.nflreadpy_version(),

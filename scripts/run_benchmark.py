@@ -2,9 +2,12 @@
 """CLI: produce the scoreboard (DrafterSpec.md §4.7).
 
 Tier-1 ranking gate (engine vs ADP, NDCG@k) + Tier-3 risk calibration. Reports
-overall AND data-complete-era (>= 2016) splits. Tier-2 draft-sim lives in
-``benchmark/draft_sim.py`` and is exercised via ``--with-sim`` once a recommender
-exists (M6).
+overall AND data-complete-era (>= 2016) splits.
+
+# REBUILD: Tier-2 (deterministic draft-sim vs ADP bots, ``--with-sim``) was
+# removed in the monte-carlo strip — ``src/benchmark/draft_sim.py`` is deleted,
+# superseded by the Monte Carlo simulator. See docs/baseline-v1-results.md for
+# the last Tier-2 numbers this system achieved.
 """
 from __future__ import annotations
 
@@ -19,10 +22,8 @@ import pandas as pd
 from sqlalchemy import select
 
 from src.benchmark.calibration import run_calibration_benchmark
-from src.benchmark.draft_sim import run_draft_sim
 from src.benchmark.ranking import run_ranking_benchmark
 from src.benchmark.report import DATA_COMPLETE_ERA_START, format_gate
-from src.config import load_config
 from src.db.models import Adp, AdpCoverage, Projection, SeasonFeature, SeasonLabel
 from src.db.session import resolve_snapshot, session_scope
 
@@ -36,11 +37,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the benchmark scoreboard (M4).")
     parser.add_argument("--snapshot-id", type=str, default=None,
                         help="Ingest snapshot to use (default: latest).")
-    parser.add_argument("--with-sim", action="store_true", help="Run Tier-2 draft sim (slow)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     resolve_snapshot(args.snapshot_id)  # validate a snapshot exists + log it
-    cfg = load_config()
 
     with session_scope() as session:
         proj = _read(session, Projection, ["player_id", "season", "p50", "p10", "p90", "position"])
@@ -82,22 +81,6 @@ def main() -> None:
     if not oof.empty:
         print("\n===== Tier-3 risk calibration =====")
         print(run_calibration_benchmark(oof).to_string(index=False))
-
-    # Tier-2 draft sim (slow — opt-in).
-    if args.with_sim:
-        sim_eligible = sorted(cov[cov["sim_eligible"]]["season"].tolist()) if not cov.empty else []
-        print(f"\n===== Tier-2 draft sim: SIM_ELIGIBLE seasons {sim_eligible} =====")
-        result = run_draft_sim(
-            projections=proj,
-            adp=adp,
-            labels=labels,
-            sim_eligible_seasons=sim_eligible,
-            slots=[1, 3, 6, 9, 12],
-            cfg=cfg,
-        )
-        if not result.per_season_slot.empty:
-            print(result.per_season_slot.to_string(index=False))
-        print(format_gate("Tier-2 roster value vs bots", result.gate))
 
 
 if __name__ == "__main__":

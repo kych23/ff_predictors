@@ -147,7 +147,7 @@ class DraftService:
         A full bench keeps every position slot open, so an empty slot_fill gives
         the bot 'best available by ADP that fits any open slot' semantics.
         """
-        from src.benchmark.draft_sim import _bot_pick
+        from src.recommender.snake import bot_pick as _bot_pick
         sess = self._get(session_id)
         state, board = self._rebuild(sess)
         slot_fill = {s: 0 for s in self.cfg.roster.slots}
