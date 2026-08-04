@@ -42,3 +42,7 @@ draft_state_*.json
 DrafterSpec.md
 
 notes/
+# web frontend
+web/node_modules/
+web/.next/
+web/.env.local

@@ -20,11 +20,29 @@ pip install -r requirements.txt
 `.env` in project root:
 
 ```
-DATABASE_URL=postgresql://user:password@localhost:5432/dbname
+DATABASE_URL=postgresql://user:password@host:5432/dbname          # serving (Supabase)
+RESEARCH_DATABASE_URL=postgresql://localhost:5432/ff_research      # research (local PG)
 CFBD_API_KEY=your_key_here   # optional — enables college features
 ```
 
 League settings live in `config/league.yaml`.
+
+### Two databases
+
+Storage is split so the hosted DB stays under Supabase's free-tier 500 MB cap:
+
+- **Research** (`RESEARCH_DATABASE_URL`, local Postgres) — full raw box scores,
+  features, labels, and backtest rows. The pipeline, training, and benchmarks
+  read and write this. ~640 MB.
+- **Serving** (`DATABASE_URL`, Supabase) — only what the API and live draft/weekly
+  serving read: players, adp, projections, weekly_projections, current-season
+  weekly_features, draft_sessions, latest snapshot. ~43 MB.
+
+`scripts/publish_serving.py` (the last pipeline step) copies the serving subset
+research → serving. If `RESEARCH_DATABASE_URL` is unset, both roles resolve to the
+same DB — the original single-DB behavior (used by the whole test suite). Start
+local Postgres with
+`/opt/homebrew/opt/postgresql@15/bin/pg_ctl -D /opt/homebrew/var/postgresql@15 start`.
 
 ## Pipeline
 
@@ -226,6 +244,16 @@ venv/bin/uvicorn api.main:app --reload --port 8000
 Sessions are event-sourced in the `draft_sessions` table (same history format as
 the CLI save files); state is rebuilt by replay on every read.
 CORS origins via `ALLOWED_ORIGINS` (default `http://localhost:3000`).
+`POST /draft/sessions/{id}/bot-pick` advances one ADP-bot opponent (demo mode).
+
+## Web
+
+Next.js draft room + zero-login mock-draft demo + landing page in [`web/`](web/README.md).
+It is a pure REST client of the API above.
+
+```bash
+cd web && npm install && npm run dev   # http://localhost:3000  (needs the API on :8000)
+```
 
 ## Data Sources
 
