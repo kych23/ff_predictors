@@ -39,8 +39,6 @@ CLAUDE.md
 # live-draft save files (event log per draft)
 draft_state_*.json
 
-DrafterSpec.md
-
 notes/
 # web frontend
 web/node_modules/
