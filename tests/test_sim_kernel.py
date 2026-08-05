@@ -276,3 +276,12 @@ def test_season_outcome_shapes(league):
     assert outcome.my_team_index == 3
     for r in range(25):
         assert sorted(outcome.final_rank[:, r]) == list(range(1, 13))
+
+
+def test_malformed_seed_root_fails_readably():
+    """An opaque fromhex error deep in the draw loop is a bad thing to meet on
+    draft night."""
+    with pytest.raises(ValueError, match="lowercase hex"):
+        rng_mod.uniforms("not-hex-at-all", RngKind.RATE, n=4)
+    with pytest.raises(ValueError, match="128 bits"):
+        rng_mod.uniforms("abcd", RngKind.RATE, n=4)

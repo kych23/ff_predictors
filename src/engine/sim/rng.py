@@ -48,9 +48,32 @@ def seed_root(snapshot_id: str, model_version: str, strategy_hash: str) -> str:
     return hashlib.blake2b(_DOMAIN + payload, digest_size=16).hexdigest()
 
 
+def _validate_root(root_hex: str) -> bytes:
+    """Fail with a readable message rather than an opaque fromhex error.
+
+    The root reaches here from `seed_root`, from config, or from a test. A
+    malformed one otherwise surfaces mid-draw as
+    "non-hexadecimal number found in fromhex() arg at position 0", which says
+    nothing about what to fix.
+    """
+    try:
+        raw = bytes.fromhex(root_hex)
+    except ValueError as exc:
+        raise ValueError(
+            f"seed root must be lowercase hex, got {root_hex!r}. "
+            f"Build it with rng.seed_root(snapshot_id, model_version, "
+            f"strategy_hash)."
+        ) from exc
+    if len(raw) != 16:
+        raise ValueError(
+            f"seed root must be 128 bits (32 hex chars), got {len(raw) * 8} bits"
+        )
+    return raw
+
+
 def _key(root_hex: str, kind: RngKind, a: int, b: int, c: int) -> np.ndarray:
     digest = hashlib.blake2b(
-        bytes.fromhex(root_hex) + struct.pack("<4q", int(kind), a, b, c),
+        _validate_root(root_hex) + struct.pack("<4q", int(kind), a, b, c),
         digest_size=16,
     ).digest()
     return np.frombuffer(digest, dtype="<u8")

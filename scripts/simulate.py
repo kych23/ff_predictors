@@ -66,7 +66,6 @@ def build_projection_bundle(board: pd.DataFrame, cfg, weeks: int) -> ProjectionB
     sigma = np.where(is_kdst, 0.0, sigma)
 
     n = len(df)
-    grid = np.linspace(0.0, 1.0, 101)
     kdst_q = np.tile(np.full(101, np.nan), (n, 1))
     kdst_path = _latest("kdst_*.json")
     if kdst_path is not None:
@@ -74,6 +73,32 @@ def build_projection_bundle(board: pd.DataFrame, cfg, weeks: int) -> ProjectionB
         for i, pos in enumerate(df["position"]):
             if pos in kdst:
                 kdst_q[i] = np.asarray(kdst[pos]["quantiles"])
+        # K/DST arrive from the board with value 0 — they have no prior-season
+        # line and are not modeled. Leaving that zero is exactly the failure
+        # BayesianArchitecture.md 3.4 warns about ("never assign them a constant
+        # zero"): greedy_lineup requires a positive selection value, so every
+        # team would field 7 starters instead of 9 and every team score would be
+        # understated. Give them their fitted empirical MEAN as the selection
+        # value; the draws still come from the full empirical distribution, so
+        # the variance that actually matters for the weekly-high term is intact.
+        for i, pos in enumerate(df["position"]):
+            if pos in kdst and value[i] == 0:
+                value[i] = float(kdst[pos]["mean"])
+
+    # Same failure mode for rookies and anyone else the identity join could not
+    # value: a zero selection value means greedy_lineup will never start them,
+    # so a roster carrying one silently fields a short lineup. §19 specifies
+    # replacement level plus a flag, not zero. Replacement here is the 10th
+    # percentile of *valued* players at that position — low enough that a real
+    # projection always outranks it, positive enough to be startable.
+    for pos in df["position"].unique():
+        at_pos = (df["position"] == pos).to_numpy()
+        valued = value[at_pos & (value > 0)]
+        if valued.size == 0:
+            continue
+        floor = float(np.quantile(valued, 0.10))
+        missing = at_pos & (value <= 0)
+        value[missing] = floor
 
     return ProjectionBundle(
         player_ids=df["player_id"].to_numpy(),
