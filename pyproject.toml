@@ -3,3 +3,7 @@
 # `from src...` imports resolve without `python -m pytest`
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "slow: hits the network or takes seconds; deselect with -m 'not slow'",
+    "v1_frozen: pinned to the v1 config shape, thawed in a later phase (DraftEngineDesign.md §9.4)",
+]

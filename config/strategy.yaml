@@ -1,0 +1,169 @@
+# Non-model-affecting configuration (DraftEngineDesign.md §10.3).
+#
+# Changing this file re-hashes decision_version ONLY. No pipeline re-run.
+# Re-run: python scripts/build_bundle.py && python scripts/mock_draft.py
+
+# Warns (does not error) when it does not match the loaded league_hash, so a
+# stale strategy file after a scoring change is visible rather than silent.
+requires_league_hash: "PENDING" # set once league.v2.yaml stabilizes
+
+payout:
+  buy_in: 32
+  currency: USD
+  # Every prize is a rule compiled to a reducer. The sum of expected payouts
+  # MUST equal buy_in * teams; the loader refuses to start otherwise, because a
+  # silently unbalanced payout produces a silently wrong objective.
+  #
+  # amount forms:  { dollars: 300 }  |  { pct_of_pot: 0.60 }
+  # optional keys: funded: external  -> excluded from pot conservation,
+  #                                     permits ties: all and negative amounts
+  #                rank: -1          -> counts from last (-1 = last place)
+  prizes:
+    - id: champion
+      type: final_rank
+      rank: 1
+      amount: { dollars: 300 }
+      ties: split
+    - id: weekly_high
+      type: weekly_high_score
+      weeks: { from: 1, to: 14 } # inclusive both ends
+      amount: { dollars: 6 } # per qualifying week
+      ties: split
+
+adp:
+  # MEASURED 2026-08-04: FFC 2026 is live (246 players, 4,460 drafts,
+  # 12-team PPR, 15 rounds) and 2021-2024 carry full stdev. 2025 returns
+  # status="Error" and is a genuine gap. Yahoo is blocked pending Fantasy
+  # Sports API permission, so FFC is PRIMARY, not a fallback (§11.5.1).
+  source: ffc # ffc | yahoo_current
+  format: ppr
+  teams: 12
+  min_ranking: 100
+  min_fullsim: null # null -> derived as league.teams * roster.rounds
+
+roster_preferences:
+  # Caps every policy's roster-legality filter (§14.1), not just tier-2 VONA.
+  # K and DST are capped so a softmax bot cannot draft six kickers late.
+  max_per_position: { QB: 2, TE: 2, K: 1, DST: 1 }
+
+yahoo:
+  league_key: null # discovered by scripts/spikes/probe_yahoo.py
+  game_keys: {} # populated once Fantasy Sports permission is granted
+  manager_map: {} # yahoo team_key -> stable manager id
+
+opponents:
+  # League-mean prior. Unknown or new managers fall back to exactly this.
+  defaults:
+    policy: softmax_adp
+    params:
+      tau: 8.0 # pick units; divides. Larger = flatter = more reaching.
+      beta: { QB: 0.0, RB: 0.0, WR: 0.0, TE: 0.0 } # additive in logits, sum-to-zero
+      slot_coef: { QB: 0.0, RB: 0.0, WR: 0.0, TE: 0.0 } # position interaction (§14.1)
+  shrinkage:
+    prior_tau_sd: 3.0
+    prior_beta_sd: 0.50
+    min_drafts_for_own_fit: 2
+  # fit.py refuses to emit per-manager params unless all three pass.
+  # MEASURED expectation (§11.5.1): with the 2025 ADP gap this cohort has 4.7
+  # observations per parameter and three degenerate managers, so the honest
+  # prior is that this gate FAILS and the system ships league-mean + slot.
+  gate:
+    require_permutation_p: 0.10
+    require_max_statistic_p: 0.10
+    require_pick_change_rate: 0.05
+    on_fail: fall_back_to_defaults # fall_back_to_defaults | warn | error
+  # Exactly teams - 1 = 11 entries. Kyle is my own seat and is NOT here.
+  # Trevor departed after 2025 and gets no per-manager fit.
+  # `fitted` blocks are written by scripts/fit_opponents.py — do not hand-edit.
+  managers:
+    - id: christian
+      display_name: Christian
+      policy: softmax_adp
+      seasons_present: [2021, 2022, 2023, 2024, 2025]
+      fitted: null
+    - id: alex
+      display_name: Alex
+      policy: softmax_adp
+      seasons_present: [2021, 2022, 2023, 2024, 2025]
+      fitted: null
+    - id: akhil
+      display_name: Akhil
+      policy: softmax_adp
+      seasons_present: [2021, 2022, 2023, 2024, 2025]
+      fitted: null
+    - id: gavin
+      display_name: Gavin
+      policy: softmax_adp
+      seasons_present: [2021, 2022, 2023, 2024, 2025]
+      fitted: null
+    - id: zach
+      display_name: Zach
+      policy: softmax_adp
+      seasons_present: [2021, 2022, 2023, 2024, 2025]
+      fitted: null
+    - id: sheil
+      display_name: Sheil
+      policy: softmax_adp
+      seasons_present: [2022, 2023, 2024, 2025]
+      fitted: null
+    - id: dhruv
+      display_name: Dhruv
+      policy: softmax_adp
+      seasons_present: [2023, 2024, 2025]
+      fitted: null
+    - id: kevin
+      display_name: Kevin
+      policy: softmax_adp
+      seasons_present: [2021, 2023, 2024]
+      fitted: null
+    - id: ashay
+      display_name: Ashay
+      policy: softmax_adp
+      seasons_present: [2024, 2025]
+      fitted: null
+    - id: ryan
+      display_name: Ryan
+      policy: softmax_adp
+      seasons_present: [2021, 2025]
+      fitted: null
+    # Raam has one captured season (2025), which the 2025 ADP gap makes
+    # unfittable — zero usable seasons. Pinned to the prior; his slot never
+    # varies, so beta/slot_coef would be collinear regardless (§14.2).
+    - id: raam
+      display_name: Raam
+      policy: softmax_adp
+      seasons_present: [2025]
+      fitted: null
+
+simulation:
+  replications:
+    inner_seasons: 2048 # power of 2; §15.7 and test_crn_pairing assume it
+    outer_parameter_draws: 50 # ceiling; the allocator spends fewer (AD-15)
+    initial_draws_per_candidate: 2
+  correlation:
+    loadings_source: fitted # fitted | assumed
+    # MEASURED same-team weekly correlations rule out a one-factor model
+    # (§13.0): QB1xWR1 = 0.370 while WR1xWR2 = 0.037 and RB1xRB2 = -0.139.
+    # The engine uses the empirical slot correlation matrix; `assumed` loads a
+    # checked-in copy of it rather than deriving constants.
+    assumed_matrix_path: config/correlation_prior.yaml
+  rollout:
+    horizon: end_of_draft # end_of_draft | rounds:<N>
+    my_future_picks: vona_heuristic
+  waiver:
+    enabled: true
+    detection_lag_weeks: 2
+    pool_size: 40
+    shrinkage_k_games: 6
+  decision:
+    shortlist_size: 6 # excludes the guaranteed ADP-faller slot
+    indifference_zone_dollars: 2.00
+    latency_budget_seconds: 25
+    demote_to_tier1_after_seconds: 18
+  narration:
+    enabled: true
+    model: claude-opus-5
+    max_tokens: 400
+    gate_on_entailment: true
+    tolerances: { dollars: 0.05, probability: 0.02, week: 0, slot: 0 }
+    on_gate_fail: render_table # render_table | omit | warn
