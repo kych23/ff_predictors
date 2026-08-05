@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -29,6 +30,24 @@ from src.platform.sources import ffc, nflverse  # noqa: E402
 from src.platform.store.manifest import build_snapshot, utc_now, write_manifest  # noqa: E402
 
 DEFAULT_OUT = Path("data/bundles/draft_night_bundle.parquet")
+
+
+def load_projections(season: int) -> tuple[pd.DataFrame, str] | tuple[None, None]:
+    """Newest calibrated projection artifact for `season`, if one exists.
+
+    Falls back to prior-season points when absent, so the tool never stops
+    producing a recommendation because a model has not been fitted yet — the
+    build order's hard rule (§22.1).
+    """
+    art = Path("data/artifacts")
+    metas = sorted(art.glob("projections_*.meta.json"))
+    for meta_path in reversed(metas):
+        meta = json.loads(meta_path.read_text())
+        if int(meta.get("target_season", -1)) != season:
+            continue
+        frame = pd.read_parquet(art / f"projections_{meta['snapshot_id']}.parquet")
+        return frame, meta["snapshot_id"]
+    return None, None
 
 
 def prior_season_value(season: int, league, entries: list) -> pd.DataFrame:
@@ -58,9 +77,24 @@ def build(season: int, out: Path) -> bundle_mod.Bundle:
     strategy = load_strategy(league)
     entries: list = []
 
-    print(f"[1/4] prior-season value ({season - 1}) through league scoring...")
-    values = prior_season_value(season, league, entries)
-    print(f"      {len(values)} players with >=1 game")
+    projections, proj_snapshot = load_projections(season)
+    if projections is not None:
+        print(f"[1/4] calibrated projections ({proj_snapshot})...")
+        nfl_names = prior_season_value(season, league, entries)[
+            ["player_id", "nfl_name"]].drop_duplicates("player_id")
+        values = projections.merge(nfl_names, on="player_id", how="left")
+        # rookies have no prior-season row and therefore no name from that
+        # source; fall back to the players table via the projection index
+        values = values.rename(columns={"p50": "value"})
+        values = values.dropna(subset=["nfl_name"])
+        value_source = "quantile_model"
+        print(f"      {len(values)} players with calibrated P10/P50/P90")
+    else:
+        print(f"[1/4] prior-season value ({season - 1}) through league scoring...")
+        values = prior_season_value(season, league, entries)
+        value_source = "prior_season_ppg"
+        print(f"      {len(values)} players with >=1 game "
+              f"(no projection artifact; run train_projection_v2.py)")
 
     print(f"[2/4] {strategy.adp.source.upper()} ADP for {season}...")
     if strategy.adp.source != "ffc":
@@ -109,7 +143,7 @@ def build(season: int, out: Path) -> bundle_mod.Bundle:
             "bye_week": pd.to_numeric(src.get("bye"), errors="coerce"),
             "value": (pd.to_numeric(src["value"], errors="coerce").fillna(0.0)
                       if matched else 0.0),
-            "value_source": "prior_season_ppg" if matched else "none",
+            "value_source": value_source if matched else "none",
             "coverage": "full" if matched else "no_prior_season",
             "adp": pd.to_numeric(src["adp"], errors="coerce"),
             "adp_stdev": pd.to_numeric(src["adp_stdev"], errors="coerce"),
@@ -133,7 +167,7 @@ def build(season: int, out: Path) -> bundle_mod.Bundle:
         players=frame, snapshot_id=snapshot_id,
         model_version=league.model_version,
         decision_version=strategy.decision_version,
-        value_source="prior_season_ppg", built_at=utc_now(),
+        value_source=value_source, built_at=utc_now(),
     )
     bundle_mod.write(b, out)
     print(f"      wrote {out} ({b.n_players} players)")

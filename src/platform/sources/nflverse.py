@@ -33,12 +33,15 @@ ASSET_LOADERS: Final[dict[str, str]] = {
     "combine": "load_combine",
     "draft_picks": "load_draft_picks",
     "players": "load_players",
+    "snap_counts": "load_snap_counts",
+    "ff_opportunity": "load_ff_opportunity",
+    "ff_playerids": "load_ff_playerids",
 }
 
 #: Assets that accept a `seasons=` argument.
 SEASONAL_ASSETS: Final = frozenset({
     "player_stats", "team_stats", "rosters", "depth_charts", "injuries",
-    "draft_picks", "combine",
+    "draft_picks", "combine", "snap_counts", "ff_opportunity",
 })
 
 
