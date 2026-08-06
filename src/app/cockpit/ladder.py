@@ -24,47 +24,15 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
 from typing import Callable
 
-import pandas as pd
+# Re-exported: the record is produced by the engine and merely presented here
+# (§9.0 — app may import engine, never the reverse).
+from src.engine.decision.recommendation import Recommendation
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass(frozen=True)
-class Recommendation:
-    tier: int
-    leader: str
-    leader_name: str
-    ranked: pd.DataFrame
-    indifference_set: list[str]
-    dollars: dict[str, float] = field(default_factory=dict)
-    aleatory_se: dict[str, float] = field(default_factory=dict)
-    epistemic_se: dict[str, float] = field(default_factory=dict)
-    p_best: float = float("nan")
-    draws_used: int = 0
-    stopped_because: str = ""
-    separating_axis: str = ""
-    stale_flags: list[str] = field(default_factory=list)
-    elapsed_s: float = 0.0
-
-    def describe(self) -> str:
-        head = (f"tier {self.tier}  {self.leader_name}  "
-                f"({self.elapsed_s:.1f}s)")
-        if self.tier <= 1 and self.leader in self.dollars:
-            head += (f"   E[$] {self.dollars[self.leader]:+.2f} "
-                     f"+/- {self.total_se(self.leader):.2f}")
-        if len(self.indifference_set) > 1:
-            head += f"\n  indifference set: {', '.join(self.indifference_set)}"
-        if self.stale_flags:
-            head += f"\n  stale: {', '.join(self.stale_flags)}"
-        return head
-
-    def total_se(self, candidate: str) -> float:
-        a = self.aleatory_se.get(candidate, 0.0)
-        e = self.epistemic_se.get(candidate, 0.0)
-        return (a ** 2 + e ** 2) ** 0.5
+__all__ = ["Recommendation", "TierFn", "recommend"]
 
 
 #: A tier callable takes a remaining-seconds budget and returns a
@@ -73,12 +41,18 @@ TierFn = Callable[[float], Recommendation]
 
 
 def recommend(tiers: dict[int, TierFn], *, budget_s: float,
-              demote_after_s: float) -> Recommendation:
+              demote_after_s: float,
+              timings: dict[str, float] | None = None) -> Recommendation:
     """Try tiers in order; demote on timeout or exception; always return.
 
     ``demote_after_s`` bounds the simulated tiers only. Tiers 2 and 3 are
     milliseconds and always get the remaining budget, because returning a
     stale-but-real answer beats returning nothing.
+
+    ``timings`` is the §17.4 stage map, shared with the tier callables. It is
+    attached to the returned recommendation INCLUDING the stages of tiers that
+    failed on the way down — a demotion whose cause is invisible is a demotion
+    nobody can fix.
     """
     start = time.perf_counter()
     for tier in sorted(tiers):
@@ -93,7 +67,8 @@ def recommend(tiers: dict[int, TierFn], *, budget_s: float,
             logger.warning("tier %d failed (%s); demoting", tier, exc)
             continue
         elapsed = time.perf_counter() - start
-        return Recommendation(**{**rec.__dict__, "elapsed_s": elapsed})
+        return Recommendation(**{**rec.__dict__, "elapsed_s": elapsed,
+                                 "stage_timings_ms": dict(timings or {})})
 
     raise RuntimeError(
         "every tier failed, including the static list. The bundle is "

@@ -84,6 +84,71 @@ def _nearest_psd(matrix: np.ndarray, *, epsilon: float = 1e-8) -> np.ndarray:
     return rebuilt
 
 
+@dataclass(frozen=True)
+class CorrelationPosterior:
+    """A stack of correlation draws — what makes the outer MC loop real.
+
+    Without this, ``epistemic_se`` measures rollout variation rather than
+    parameter uncertainty, and §5.3's whole argument (that the nuisance
+    parameter is larger than the decision) cannot be checked against anything.
+
+    ``point`` is the full-sample estimate; ``draws`` are block-bootstrap
+    resamples used as theta in the two-level loop (§15.5).
+    """
+
+    point: "SlotCorrelation"
+    draws: tuple["SlotCorrelation", ...]
+
+    def __len__(self) -> int:
+        return len(self.draws)
+
+    def draw(self, k: int) -> "SlotCorrelation":
+        """Theta_k. Wraps around so a deep allocator run never runs out."""
+        return self.draws[k % len(self.draws)] if self.draws else self.point
+
+    @property
+    def slots(self) -> tuple[str, ...]:
+        return self.point.slots
+
+    def spread(self, a: str, b: str) -> float:
+        """SD of one pairwise correlation across draws — the elasticity input."""
+        if not self.draws:
+            return 0.0
+        return float(np.std([d.correlation(a, b) for d in self.draws], ddof=1))
+
+
+def bootstrap_posterior(
+    panel: pd.DataFrame, *, draws: int = 50, slots: Sequence[str] = DEFAULT_SLOTS,
+    seed: int = 20260805, snapshot_id: str = "", model_version: str = "",
+) -> CorrelationPosterior:
+    """Block bootstrap over TEAM-SEASONS.
+
+    The block is a team-season, not a team-game: weeks within a team-season
+    share a roster, a scheme and an injury history, so resampling individual
+    team-games would treat dependent observations as independent and produce a
+    posterior far too tight.
+    """
+    rng = np.random.default_rng(seed)
+    panel = panel.copy()
+    panel["_block"] = (panel["season"].astype(str) + "|" + panel["team"].astype(str))
+    blocks = panel["_block"].unique()
+    by_block = {b: g for b, g in panel.groupby("_block")}
+
+    point = fit_slot_correlation(panel, slots=slots, snapshot_id=snapshot_id,
+                                 model_version=model_version)
+    resamples = []
+    for _ in range(draws):
+        picked = rng.choice(blocks, size=len(blocks), replace=True)
+        boot = pd.concat([by_block[b] for b in picked], ignore_index=True)
+        try:
+            resamples.append(fit_slot_correlation(
+                boot, slots=slots, snapshot_id=snapshot_id,
+                model_version=model_version))
+        except np.linalg.LinAlgError:
+            continue          # a degenerate resample is dropped, not patched
+    return CorrelationPosterior(point=point, draws=tuple(resamples))
+
+
 def fit_slot_correlation(
     panel: pd.DataFrame, *, slots: Sequence[str] = DEFAULT_SLOTS,
     snapshot_id: str = "", model_version: str = "",

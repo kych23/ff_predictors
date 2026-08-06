@@ -102,7 +102,7 @@ def match_by_name(
 def _fuzzy_pass(matched, missed, rf_unique, right_name):
     """Second tier: rapidfuzz, requiring a unique winner clear of the field."""
     try:
-        from rapidfuzz import process
+        from rapidfuzz import fuzz, process
     except ImportError:  # rapidfuzz is optional; deterministic tier still works
         return matched, missed
 
@@ -110,7 +110,10 @@ def _fuzzy_pass(matched, missed, rf_unique, right_name):
     still_missing = []
     recovered = []
     for _, row in missed.iterrows():
-        results = process.extract(row["_key"], choices, limit=2)
+        # token_sort_ratio per §11.4 — rapidfuzz's default WRatio scores
+        # substrings much higher and would let a bare surname clear 92.
+        results = process.extract(row["_key"], choices, limit=2,
+                                  scorer=fuzz.token_sort_ratio)
         if not results:
             still_missing.append(row)
             continue

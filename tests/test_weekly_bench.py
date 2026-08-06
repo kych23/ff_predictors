@@ -1,4 +1,12 @@
 """Weekly lineup benchmark tests."""
+
+import pytest
+
+# §9.4: this module is pinned to the v1 config shape. api/, web/ and the
+# weekly start/sit surface are FROZEN for the build window, so v1 stays
+# alive underneath them and these tests are deselected from the default
+# run rather than migrated. Thaw is a §22.2 follow-up.
+pytestmark = pytest.mark.v1_frozen
 import numpy as np
 import pandas as pd
 

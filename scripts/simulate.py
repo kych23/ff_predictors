@@ -25,8 +25,10 @@ from src.domain.payout.compile import compile_payout  # noqa: E402
 from src.engine.sim import kernel, rng as rng_mod  # noqa: E402
 from src.engine.sim.draws import ProjectionBundle, draw_points  # noqa: E402
 from src.models.correlation.slot_matrix import DEFAULT_SLOTS, from_prior  # noqa: E402
+from src.models.weekly.hazard import HazardModel, player_covariates  # noqa: E402
 from src.models.weekly.variance import WeeklySigmaModel  # noqa: E402
 from src.platform import bundle as bundle_mod  # noqa: E402
+from src.platform.sources import nflverse  # noqa: E402
 
 ARTIFACTS = Path("data/artifacts")
 #: depth-chart rank -> correlation slot, by position
@@ -39,7 +41,55 @@ def _latest(pattern: str):
     return hits[-1] if hits else None
 
 
-def build_projection_bundle(board: pd.DataFrame, cfg, weeks: int) -> ProjectionBundle:
+def load_correlation_matrix():
+    """The FITTED slot matrix, falling back to the checked-in prior.
+
+    The YAML prior exists so the simulator runs before anything has been
+    fitted. Silently preferring it once an artifact is on disk would mean
+    measuring assumed correlations instead of real ones.
+    """
+    path = _latest("correlation_*.npz")
+    if path is not None and "posterior" not in path.name:
+        from src.models.artifacts import load_correlation
+        return load_correlation(path.stem.split("_", 1)[1])
+    return from_prior(__import__("yaml").safe_load(
+        Path("config/correlation_prior.yaml").read_text()))
+
+
+def hazard_matrix(board: pd.DataFrame, cfg, weeks: int, season: int
+                  ) -> tuple[np.ndarray, str]:
+    """(P, W) availability, from the fitted §12.4 model where one exists.
+
+    The fallback is a flat constant and is REPORTED as such. A flat hazard is
+    not a neutral default — it prices a 34-year-old back and a 24-year-old
+    receiver identically — so a run that uses it should say so out loud rather
+    than let the number pass for a model output.
+    """
+    path = _latest("hazard_*.json")
+    n = len(board)
+    if path is None:
+        return np.full((n, weeks), 0.93), "flat 0.93 (no hazard artifact)"
+
+    model = HazardModel.from_dict(json.loads(path.read_text()))
+    prior = nflverse.fetch("player_stats", seasons=[season - 1]).frame
+    try:
+        players = nflverse.fetch("players").frame
+    except Exception:                              # noqa: BLE001 — optional
+        players = pd.DataFrame(columns=["player_id"])
+    cov = player_covariates(board["player_id"], board["position"], prior,
+                            players, season)
+    mat = model.matrix(cov["position"].to_numpy(), cov["age"].to_numpy(),
+                       cov["missed_prior"].to_numpy(), weeks=weeks)
+    # K and DST are outside the modeled positions the hazard was fitted on, and
+    # both are streamed weekly rather than held through an injury. Their
+    # empirical distributions already include zero weeks, so applying a hazard
+    # on top would double-count the absence.
+    mat[board["position"].isin(["K", "DST"]).to_numpy()] = 1.0
+    return mat, f"fitted ({path.name}), range {mat.min():.3f}-{mat.max():.3f}"
+
+
+def build_projection_bundle(board: pd.DataFrame, cfg, weeks: int,
+                            season: int = 2026) -> ProjectionBundle:
     """Map the draft board onto the simulator's array contract."""
     sigma_path = _latest("weekly_sigma_*.json")
     if sigma_path is None:
@@ -100,6 +150,9 @@ def build_projection_bundle(board: pd.DataFrame, cfg, weeks: int) -> ProjectionB
         missing = at_pos & (value <= 0)
         value[missing] = floor
 
+    hazard, hazard_source = hazard_matrix(df, cfg, weeks, season)
+    print(f"      hazard: {hazard_source}")
+
     return ProjectionBundle(
         player_ids=df["player_id"].to_numpy(),
         positions=df["position"].to_numpy(),
@@ -112,7 +165,7 @@ def build_projection_bundle(board: pd.DataFrame, cfg, weeks: int) -> ProjectionB
         rate_p50=value,
         rate_p90=value + 1.28 * sigma / np.sqrt(17),
         weekly_sigma=sigma,
-        games_hazard=np.full((n, weeks), 0.93),
+        games_hazard=hazard,
         kdst_quantiles=kdst_q,
     )
 
@@ -148,8 +201,7 @@ def main() -> None:
     print(f"bundle {b.snapshot_id}  value_source={b.value_source}  "
           f"{len(board)} players")
 
-    corr = from_prior(__import__("yaml").safe_load(
-        Path("config/correlation_prior.yaml").read_text()))
+    corr = load_correlation_matrix()
     print(f"correlation: {corr.source}, min eigenvalue {corr.min_eigenvalue:.3f}")
 
     proj = build_projection_bundle(board, cfg, weeks)

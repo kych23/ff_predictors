@@ -20,6 +20,7 @@ import numpy as np
 
 from src.core.errors import ArtifactSnapshotMismatch, DataError
 from src.models.correlation.slot_matrix import SlotCorrelation
+from src.models.weekly.hazard import HazardModel
 from src.models.weekly.kdst import KDSTModel
 from src.models.weekly.variance import WeeklySigmaModel
 
@@ -34,6 +35,9 @@ class ArtifactSet:
     correlation: SlotCorrelation
     kdst: KDSTModel
     snapshot_id: str
+    #: Optional so an ArtifactSet fitted before §12.4 still loads. Absent means
+    #: the simulator falls back to a flat hazard and says so.
+    hazard: HazardModel | None = None
 
     def assert_consistent(self) -> None:
         bad = {
@@ -42,6 +46,7 @@ class ArtifactSet:
                 ("weekly_sigma", self.weekly_sigma.snapshot_id),
                 ("correlation", self.correlation.snapshot_id),
                 ("kdst", self.kdst.snapshot_id),
+                ("hazard", self.hazard.snapshot_id if self.hazard else None),
             )
             if sid and sid != self.snapshot_id
         }
@@ -114,12 +119,30 @@ def load_kdst(snapshot_id: str, *, root: Path | None = None) -> KDSTModel:
     return KDSTModel.from_dict(json.loads(path.read_text()))
 
 
+def save_hazard(model: HazardModel, *, root: Path | None = None) -> Path:
+    path = _path("hazard", model.snapshot_id, "json", root)
+    path.write_text(json.dumps(model.to_dict(), indent=2))
+    return path
+
+
+def load_hazard(snapshot_id: str, *, root: Path | None = None) -> HazardModel:
+    path = _path("hazard", snapshot_id, "json", root)
+    if not path.exists():
+        raise DataError(f"no hazard artifact at {path}")
+    return HazardModel.from_dict(json.loads(path.read_text()))
+
+
 def load_all(snapshot_id: str, *, root: Path | None = None) -> ArtifactSet:
+    try:
+        hazard = load_hazard(snapshot_id, root=root)
+    except DataError:
+        hazard = None
     artifacts = ArtifactSet(
         weekly_sigma=load_weekly_sigma(snapshot_id, root=root),
         correlation=load_correlation(snapshot_id, root=root),
         kdst=load_kdst(snapshot_id, root=root),
         snapshot_id=snapshot_id,
+        hazard=hazard,
     )
     artifacts.assert_consistent()
     return artifacts

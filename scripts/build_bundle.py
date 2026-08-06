@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.config import load_league, load_strategy  # noqa: E402
 from src.domain.scoring.engine import score_offense  # noqa: E402
+from src.engine.decision.tiers import build_tier_table, write_tiers  # noqa: E402
 from src.platform import bundle as bundle_mod  # noqa: E402
 from src.platform.identity.match import match_by_name  # noqa: E402
 from src.platform.sources import ffc, nflverse  # noqa: E402
@@ -171,6 +172,16 @@ def build(season: int, out: Path) -> bundle_mod.Bundle:
     )
     bundle_mod.write(b, out)
     print(f"      wrote {out} ({b.n_players} players)")
+
+    # Tier-3 artifact (§7.4). Written here because this is the only place that
+    # holds the finished board, and tier 3 must not depend on anything that
+    # could fail at draft time — a parquet file is the whole contract.
+    tiers = build_tier_table(frame)
+    tier_path = write_tiers(tiers, snapshot_id)
+    counts = tiers.groupby("position")["tier"].nunique()
+    print(f"      tier-3 fallback: {tier_path}")
+    print("      tiers per position: "
+          + ", ".join(f"{pos} {int(n)}" for pos, n in counts.items()))
     return b
 
 

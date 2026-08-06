@@ -5,6 +5,14 @@ Contracts from notes/weekly-pipeline-design.md:
 - Vegas features from the target week's schedule row are allowed (pre-kickoff)
 - rolling features come from prior weeks only
 """
+
+import pytest
+
+# §9.4: this module is pinned to the v1 config shape. api/, web/ and the
+# weekly start/sit surface are FROZEN for the build window, so v1 stays
+# alive underneath them and these tests are deselected from the default
+# run rather than migrated. Thaw is a §22.2 follow-up.
+pytestmark = pytest.mark.v1_frozen
 import pandas as pd
 
 from src.features.weekly_assemble import assemble_weekly_features

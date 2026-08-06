@@ -7,6 +7,7 @@ Writes data/artifacts/{weekly_sigma,correlation,kdst}_<snapshot_id>.*
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -20,7 +21,12 @@ from src.domain.scoring.dst import points_allowed_score, score_dst  # noqa: E402
 from src.domain.scoring.engine import score_offense  # noqa: E402
 from src.domain.scoring.kicker import score_kicker  # noqa: E402
 from src.models import artifacts  # noqa: E402
-from src.models.correlation.slot_matrix import fit_slot_correlation  # noqa: E402
+from src.models.correlation.slot_matrix import (  # noqa: E402
+    bootstrap_posterior, fit_slot_correlation,
+)
+from src.models.weekly.hazard import (  # noqa: E402
+    AGE_BUCKETS, MISSED_BUCKETS, build_hazard_panel, fit_hazard,
+)
 from src.models.weekly.kdst import KDSTModel, fit_empirical  # noqa: E402
 from src.models.weekly.panel import assign_slots, player_season_summary  # noqa: E402
 from src.models.weekly.variance import fit_weekly_sigma  # noqa: E402
@@ -79,6 +85,14 @@ def main() -> None:
         n = corr.pair_counts[corr.index_of(a), corr.index_of(b)]
         print(f"        {a} x {b}: {corr.correlation(a, b):+.3f}  (n={n:,})")
 
+    print("      bootstrap posterior (block = team-season)...")
+    posterior = bootstrap_posterior(slotted, draws=50, snapshot_id=snapshot_id,
+                                    model_version=cfg.model_version)
+    print(f"      {len(posterior)} usable draws")
+    for a, b in [("QB1", "WR1"), ("WR1", "WR2"), ("RB1", "RB2")]:
+        print(f"        {a} x {b}: {posterior.point.correlation(a, b):+.3f} "
+              f"+/- {posterior.spread(a, b):.3f}")
+
     print("[4/5] K and DST empirical distributions...")
     kickers = stats[stats["position"] == "K"].copy()
     k_points = score_kicker(kickers, cfg.scoring.kicker)
@@ -100,15 +114,50 @@ def main() -> None:
         print(f"        {pos}: mean {dist.mean:5.2f}  sd {dist.sd:5.2f}  "
               f"n={dist.n_observations:,}")
 
-    print("[5/5] writing artifacts...")
+    print("[5/6] availability hazard...")
+    try:
+        players_pull = nflverse.fetch("players")
+        entries.append(players_pull.entry)
+        players = players_pull.frame
+    except Exception as exc:                       # noqa: BLE001 — optional input
+        print(f"      players table unavailable ({exc}); ages default to 26")
+        players = pd.DataFrame(columns=["player_id"])
+
+    positions = tuple(cfg.roster.modeled_positions)
+    # `skill` carries the scored `points` column, so the panel builder can
+    # apply the draftable-depth filter that matches the fitting population to
+    # a draft board.
+    hz_panel = build_hazard_panel(skill, players, positions)
+    hazard = fit_hazard(hz_panel, positions, snapshot_id=snapshot_id,
+                        model_version=cfg.model_version)
+    print(f"      fitted on {hazard.n_observations:,} player-weeks, "
+          f"base active rate {hazard.base_rate:.3f}")
+    print(f"      {'position':9s} {'age':9s} {'missed':9s} {'P(active)':>9s}")
+    for pos in positions:
+        for age, missed in ((23, 0), (29, 0), (29, 6), (33, 6)):
+            p = float(hazard.predict([pos], [age], [missed], [8])[0])
+            print(f"      {pos:9s} {age:<9d} {missed:<9d} {p:9.3f}")
+    spread = hazard.predict(
+        [positions[0]] * 2, [23, 33], [0, 10], [8, 8])
+    print(f"      spread across the extremes: {spread.min():.3f} to "
+          f"{spread.max():.3f}  (the flat 0.93 spanned nothing)")
+    print(f"      age buckets {AGE_BUCKETS}  missed buckets {MISSED_BUCKETS}")
+
+    print("[6/6] writing artifacts...")
     snapshot_id = build_snapshot(entries)
     write_manifest(snapshot_id, entries)
     sigma_model = _restamp(sigma_model, snapshot_id)
     corr = _restamp(corr, snapshot_id)
     kdst = _restamp(kdst, snapshot_id)
+    hazard = _restamp(hazard, snapshot_id)
+    post_path = Path("data/artifacts") / f"correlation_posterior_{snapshot_id}.npz"
+    np.savez(post_path,
+             matrices=np.stack([d.matrix for d in posterior.draws]),
+             slots=json.dumps(list(posterior.point.slots)))
     for path in (artifacts.save_weekly_sigma(sigma_model),
                  artifacts.save_correlation(corr),
-                 artifacts.save_kdst(kdst)):
+                 artifacts.save_kdst(kdst),
+                 artifacts.save_hazard(hazard), post_path):
         print(f"      {path}")
     artifacts.load_all(snapshot_id).assert_consistent()
     print(f"      snapshot {snapshot_id} — provenance consistent")

@@ -3,6 +3,9 @@
 # `from src...` imports resolve without `python -m pytest`
 pythonpath = ["."]
 testpaths = ["tests"]
+# §9.4: the default run is v2-only. The frozen v1 surfaces (api/, web/, weekly
+# start/sit) still pass — run them with `pytest -m v1_frozen` or `-m ""`.
+addopts = "-m 'not v1_frozen'"
 markers = [
     "slow: hits the network or takes seconds; deselect with -m 'not slow'",
     "v1_frozen: pinned to the v1 config shape, thawed in a later phase (DraftEngineDesign.md §9.4)",

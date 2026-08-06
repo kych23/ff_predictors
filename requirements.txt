@@ -18,12 +18,26 @@ lightgbm
 # Resilient third-party HTTP (CFBD + FFC) via src/ingest/http.py
 httpx
 
+# Identity spine, §11.4 `fuzzy` cascade tier. NOT optional: both spine.py and
+# match.py guard the import so the tiers above fuzzy keep working without it,
+# and that guard means an absent rapidfuzz degrades SILENTLY — every name the
+# deterministic tier misses goes straight to the confirm card. Found exactly
+# that way: the fuzzy tier was dead in this environment until it was tested.
+rapidfuzz
+
 # NOTE: CFBD college data is pulled via its REST API through ingest/http.py, NOT the
 # `cfbd` Python client — that client pins pydantic v1, which conflicts with
 # nflreadpy's pydantic v2 requirement. New .env key: CFBD_API_KEY (CFBD is not
 # anonymous), alongside DATABASE_URL.
 
 # xgboost was the retired weekly model; LightGBM quantile GBM replaces it.
+
+# Narration (§18). Optional at runtime — `narrate()` falls back to
+# `render_table`, which needs no network, no key and no model and states the
+# same attribution record. Listed because strategy.yaml ships
+# `narration.enabled: true`, so an absent package is a silent downgrade rather
+# than a chosen one.
+anthropic
 
 # HTTP API (api/) — draft sessions, players, recommendations. httpx (client
 # for the API's own tests) already listed above as a shared ingest dependency.

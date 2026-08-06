@@ -214,6 +214,18 @@ def main() -> None:
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     path = ARTIFACTS / f"projections_{snapshot_id}.parquet"
     out.to_parquet(path, index=False)
+
+    # Persist the training matrix and the target-season features. The §21.4
+    # reliability study refits this model on resampled data and must resample
+    # THE SAME matrix — rebuilding it from sources would confound estimation
+    # variance with any drift in the sources between runs, which is the one
+    # thing that study is trying to isolate.
+    matrix_path = ARTIFACTS / f"training_matrix_{snapshot_id}.parquet"
+    keep = ["player_id", "season", "position", TARGET] + cols
+    pd.concat(
+        [data[keep], target_rows.reindex(columns=keep)], ignore_index=True,
+    ).to_parquet(matrix_path, index=False)
+    print(f"      training matrix -> {matrix_path}")
     (ARTIFACTS / f"projections_{snapshot_id}.meta.json").write_text(json.dumps({
         "snapshot_id": snapshot_id, "model_version": cfg.model_version,
         "target_season": args.target, "n_players": len(out),

@@ -1,14 +1,254 @@
 # FantasyForecast
 
-PPR fantasy football draft assistant. Pooled LightGBM quantile model (P10/P50/P90) + VONA-based draft recommender, plus a weekly start/sit optimizer for the season itself.
+A fantasy football draft engine that prices every pick in **dollars of expected league winnings**, by simulating the rest of the season a few hundred times before you're on the clock.
 
-## Stack
+Most draft tools rank players by projected points. Points aren't what you win. A league that pays the top three finishers rewards a roster that reaches the money, and the roster that maximizes expected points is not usually the roster that maximizes expected payout — the two diverge exactly where variance matters. This engine optimizes the thing you actually get paid on.
 
-- Python — ETL, feature engineering, ML
-- LightGBM — pooled quantile GBM across QB/RB/WR/TE
-- PostgreSQL — snapshot-stamped storage
-- nflverse (`nflreadpy`) — play-by-play, rosters, combine data
-- CFBD REST API — college stats (for rookies)
+It runs fully offline on a laptop, answers inside a 25-second pick clock, and degrades on a timer instead of stalling.
+
+```
+[round 1, pick 4 of 180, YOU on the clock — you are up]
+
+tier 0  Jahmyr Gibbs  (10.5s)   E[$] +45.62 +/- 2.15
+  stale: no_prior_season=66
+       player_name position  adp  E_dollars  aleatory_se  epistemic_se  draws
+      Jahmyr Gibbs       RB  1.6      45.62         1.51          1.53     50
+ Amon-Ra St. Brown       WR  7.2      34.42         2.31          3.11      4
+Jaxon Smith-Njigba       WR  5.9      26.38         2.33          1.44      2
+        Puka Nacua       WR  2.7      25.85         2.34          6.07      2
+  separating axis: weekly_high
+
+WHY (ollama):
+  Jahmyr Gibbs has a slight edge over Amon-Ra St. Brown in weekly highs
+  more than $0.55. Both players are slightly ahead for the championship,
+  but Jahmyr Gibbs edges out Amon-Ra St. Brown more than $0.49.
+```
+
+(That output is verbatim, awkward phrasing included. A 7B model writing under a
+schema constraint produces clumsy sentences; the tradeoff is that every quantity
+in them is checked against the simulation record before it prints.)
+
+Read that output as: Gibbs is worth about **$46 of expected winnings**, ±$2. The `draws` column shows the simulator spent 50 parameter draws on him and 2–4 on the others — a successive-halving allocator that stops paying for candidates already out of contention. `separating_axis` names *why* he leads: weekly-high payouts, not championship equity.
+
+`stale: no_prior_season=66` is the board telling on itself — 66 of 246 players (rookies, and everyone who didn't play in 2025) have no prior-season line, so their value comes from a replacement-level floor rather than a projection. The engine prints what it's unsure about instead of quietly averaging it away.
+
+---
+
+## Table of contents
+
+- [What makes it different](#what-makes-it-different)
+- [Demo](#demo)
+- [How it works](#how-it-works)
+- [What's actually validated](#whats-actually-validated)
+- [Setup](#setup)
+- [Running a draft](#running-a-draft)
+- [Architecture](#architecture)
+- [Testing](#testing)
+- [Known limitations](#known-limitations)
+- [Legacy v1 surfaces](#legacy-v1-surfaces)
+- [Glossary](#glossary)
+
+---
+
+## What makes it different
+
+**It optimizes payout, not points.** Your league's prize structure is a config file — winner-take-all, top-three, weekly high-score side pots, whatever you actually play. The objective compiles from that config, so a league that pays weekly highs produces different picks than one that pays only the champion. Same roster, different money.
+
+**It simulates instead of scoring.** Each candidate is evaluated by drawing full seasons for all 12 rosters: correlated weekly performances, injury hazard, bye weeks, lineup decisions made on *pre-week* projections and scored on *drawn* outcomes. A 14-week regular season, then a 6-team bracket over weeks 15–17, then the payout rules — all read from config.
+
+The non-clairvoyance rule is the load-bearing one: lineups are chosen on projections and scored on draws. Choosing on the draws inflates every roster, inflates high-variance rosters most, and reverses exactly the ceiling-vs-floor conclusions the simulator exists to produce. The lineup function takes selection values and realized values as two separate arguments so the rule can't be violated by accident at a call site.
+
+**It reports its own uncertainty, decomposed.** `aleatory_se` is simulation noise — more replications shrinks it. `epistemic_se` is parameter uncertainty — more replications will *not* shrink it, because it comes from a bootstrap posterior over the fitted correlation matrix. Conflating the two is how simulators talk themselves into false confidence. When two candidates overlap, the engine says so and returns an indifference set rather than a fake ranking.
+
+**It degrades on a wall clock.** Four tiers: full two-level Monte Carlo (0), single-level (1), VONA (2), static board (3). If tier 0 misses its deadline the ladder demotes automatically and tells you which rung answered. A draft tool that hangs is worse than one that's approximate — you have 25 seconds either way.
+
+**Its explanations can't hallucinate a number.** A local LLM writes the "why," but never sees or emits a numeric value: it picks a subject and a comparator from a schema-constrained enum, and the numbers are read off the simulation record afterward. Every clause is then checked against that record and dropped if it doesn't entail. On the 20-record benchmark (`scripts/bench_narration.py`, includes near-ties, split prizes, and bye conflicts) `qwen2.5:7b` currently passes 20/20 at 3.7s median; earlier runs sat at 96–97%. Failed clauses are discarded silently and the fallback is a plain table, so narration is never load-bearing.
+
+That benchmark started at **0/12**. Four defects, all in the harness rather than the model: the prompt showed the model the values so it copied them; the directional margin was smaller than the gate's own tolerance; `subject` and `quantity` were independent enums, making impossible combinations expressible; and the slot label `"RB2"` contains a digit, which the numeral check flagged.
+
+**Every recommendation is hash-chained.** The ledger is append-only with a sha256 chain, so in November you can see what the engine said in August and prove it wasn't edited after the season embarrassed you.
+
+---
+
+## Demo
+
+### One command
+
+```bash
+bash scripts/demo.sh
+```
+
+Drives the real cockpit through a scripted sequence against the real bundle — three opponent picks, the engine's recommendation at seat 4, the pick, the ledger, and an `undo`. No interaction, no network, nothing stubbed.
+
+The `undo` at the end is the part worth watching: the engine re-runs and returns **E[$] +45.62 ± 2.15** again, to the cent. That's Common Random Numbers doing their job — the same candidate evaluated against the same simulated seasons gives the same answer, which is what makes a $2 edge between two players meaningful instead of noise.
+
+```
+[round 1, pick 5 of 180, seat 5 on the clock — 16 until your pick]
+>   pick   4  tier 0  Jahmyr Gibbs -> Jahmyr Gibbs
+  1 entries verified
+
+[round 1, pick 5 of 180, seat 5 on the clock — 16 until your pick]
+>   undone. round 1, pick 4 of 180, YOU on the clock — you are up
+```
+
+To record a terminal GIF from it:
+
+```bash
+asciinema rec demo.cast -c "bash scripts/demo.sh"
+agg demo.cast docs/demo.gif
+```
+
+### A full 180-pick rehearsal
+
+`scripts/mock_draft.py` plays an entire draft against eleven ADP bots — nothing stubbed, same ladder, ledger, and identity resolution as draft night.
+
+```
+$ venv/bin/python scripts/mock_draft.py --seat 4
+
+MOCK DRAFT — seat 4, 12x15, clean
+  bundle sn2_270597d436defec783c57190, 246 players, latency budget 25s
+
+  pick   4 (mine)  tier 0  Jahmyr Gibbs             8.6s
+  pick  21 (mine)  tier 0  Josh Allen               7.5s
+  pick  28 (mine)  tier 0  Malik Nabers             7.5s
+  pick  45 (mine)  tier 0  D'Andre Swift            7.5s
+  pick  52 (mine)  tier 0  TreVeyon Henderson       7.4s
+  ...
+  pick 172 (mine)  tier 0  Kimani Vidal             6.2s
+
+  180 picks recorded, 15 mine
+  my roster: Jahmyr Gibbs (RB), Josh Allen (QB), Malik Nabers (WR),
+             D'Andre Swift (RB), TreVeyon Henderson (RB), Jalen Hurts (QB),
+             Chris Godwin Jr. (WR), Josh Downs (WR), George Kittle (TE),
+             Alvin Kamara (RB), Zach Charbonnet (RB), James Conner (RB),
+             Kimani Vidal (RB), Kayshon Boutte (WR), Oronde Gadsden (TE)
+
+  LATENCY
+    median 7.1s   max 8.6s   budget 25s
+    over budget: 0 of 15
+  TIERS USED: tier 0: 15
+  LEDGER: 15 entries verified
+
+  REHEARSAL PASSED
+```
+
+The pass criterion is deliberately not "no exception." It's that every pick came back inside the latency budget *and* the ledger chain verifies. A tool that survives by silently doing nothing has not survived.
+
+### Chaos mode
+
+`--chaos` injects the failures that actually happen at a draft, rather than the ones that are easy to simulate:
+
+| Injection | What it tests |
+|---|---|
+| A name nobody can resolve | typo'd surname mid-draft |
+| A player taken twice | someone calls a name already gone |
+| An undo under time pressure | the classic |
+| An injury scratch | `zero` on a rostered player |
+| A mid-draft restart | process dies, resume from disk |
+
+The rehearsal asserts all five actually fired — otherwise a passing run proves nothing. Three rehearsals (two chaos, seats 4 and 9) pass at median 5.9–6.5s per pick.
+
+Every one of these was found by playing a draft end to end, and none were visible to a unit test:
+
+- `taken_rows` was never populated, so every rollout began at pick 1 with twelve empty rosters — the engine was answering "best player on a roster built from scratch" *at every pick*, and produced an illegal 8-WR/5-RB team with no QB.
+- Candidate rows addressed the wrong frame, so at pick 165 it recommended a player taken at pick 1.
+- Tier 0 returned a row index where tiers 2/3 returned a player id — same field, different meaning per rung, corrupting the ledger.
+- `undo` followed by a re-pick hit a `UNIQUE` constraint and killed the terminal at pick 45. An append-only chain records a correction by *appending*; the constraint was wrong.
+
+---
+
+## How it works
+
+```
+nflverse box scores ──┐
+                      ├──▶ weekly panel ──▶ σ model, hazard model, K/DST distributions
+FFC ADP ──────────────┘                              │
+                                                     ▼
+                                       correlated season draws (Cholesky)
+                                                     │
+                              ┌──────────────────────┴──────────┐
+                              ▼                                 ▼
+                      opponent rollout                   greedy lineups
+                              │                                 │
+                              └──────────────────┬──────────────┘
+                                                 ▼
+                                schedule ▶ bracket ▶ payout objective
+                                                 ▼
+                                     E[$] per candidate ± SE
+                                                 ▼
+                               allocator ▶ indifference set ▶ ladder
+
+        (waiver floor: built and tested, not yet wired into the kernel)
+```
+
+**Projections.** A pooled LightGBM quantile GBM (P10/P50/P90, position as a categorical feature — not per-position models) predicts per-game scoring rate. Quantile crossing is fixed by rearrangement rather than clipping, and intervals are calibrated per player-type bucket with split conformal.
+
+**Weekly variance.** Season rates alone can't price a boom/bust player. A separate model fits within-season σ, so two players with identical projections but different week-to-week spread produce different payout distributions — which is the entire point when the league pays weekly high scores.
+
+**Correlation.** Same-team players move together. The design originally assumed a one-factor model; measuring it ruled that out, so the engine uses an **empirical slot correlation matrix** with a Cholesky factor, and a block bootstrap over it supplies the epistemic posterior.
+
+**Common Random Numbers.** Every draw is addressed by a counter-based RNG (blake2b-derived key + Philox), so candidate A and candidate B are compared on *the same simulated seasons*. This is the difference between resolving a $2 edge in 200 replications and needing 20,000. Inverse-CDF sampling is used throughout — never Ziggurat — so extending a draw reuses its prefix instead of redrawing it.
+
+Because CRN makes replications dependent, the standard error is `sd_r(mean_k D[r,:]) / sqrt(R)` — *not* `/ sqrt(K*R)`. The naive form would understate uncertainty by roughly the square root of the number of candidates.
+
+**Allocation.** Successive halving concentrates replications on candidates still in contention. That's what the lopsided `draws` column above shows: 50 for the leader, 2 for a candidate already eliminated.
+
+---
+
+## What's actually validated
+
+The project runs a **pre-registered power audit** before reporting any result, and it downgrades its own claims. Of seven declared gates, three are powered enough to claim and four are explicitly labeled descriptive-only:
+
+```
+gate                                   n   deff   n_eff       MDE  power  verdict
+---------------------------------- ----- ------ ------- --------- ------  ----------------
+ndcg_at_84_vs_adp                      8   1.00     8.0    0.0218   0.97  claim
+ndcg_at_36_vs_adp                      8   1.00     8.0    0.0277   0.71  claim
+reliability_spearman_at_84           200   4.50    44.4    0.0504   0.79  claim
+expected_dollars_vs_adp_bots         200   4.85    41.2   17.8872   0.09  descriptive_only
+quantile_coverage_by_bucket          140   1.00   140.0    0.0947   0.14  descriptive_only
+objective_backtest_weekly_high         8   2.30     3.5    0.1127   0.11  descriptive_only
+opponent_model_pick_change_rate      200   4.50    44.4    0.0916   0.33  descriptive_only
+```
+
+`deff` is the Kish design effect, `1 + (m-1)ρ`. Twelve rosters drawn from one simulated draft are not twelve independent observations; ignoring that turns 200 drafts into a claim they can't support. Here it cuts 200 → 41 effective.
+
+The headline consequence: **"our engine beats ADP bots by $4" is not a claim this project is allowed to make.** Detecting a $4 effect would need ~4,000 simulated drafts; 200 gives 9% power. The number is reported as a descriptive statistic with that caveat attached, every time.
+
+**Three findings the audits produced that a green checkmark would have hidden:**
+
+*The opponent model failed its own gate.* Fitting per-manager draft tendencies from league history didn't beat a league-mean baseline (permutation p = 0.135). The design pre-committed to `on_fail: fall_back_to_defaults`, so the engine ships league-mean + slot covariate and the per-manager policies were never built. Recorded as a null result rather than quietly kept.
+
+*The distributional backtest points at the instrument.* The PIT histogram slopes downward — the predictive distribution is biased high:
+
+```
+[0.0,0.1)  1.28  ##########################
+[0.1,0.2)  1.05  #####################
+...
+[0.8,0.9)  0.83  #################
+[0.9,1.0)  0.70  ##############
+```
+
+Re-running with shrinkage isolates the cause: KS p goes 0.0000 → 0.0134 → 0.6989 at shrink 0.00 / 0.20 / 0.35. Raw prior-season PPG doesn't regress to the mean, so it overstates next season for exactly the players a value draft selects — the ones coming off career years. The shipped quantile model already regresses (OOF P10–P90 coverage 0.808 against 0.80 nominal), placing it on the passing side of that sweep. The failure is the backtest's naive instrument, not the simulator.
+
+*The Sobol variance decomposition doesn't converge* — and for a structural reason worth stating: the sensitivity design can't share a common random base across its A/B matrices, so simulator Monte-Carlo noise gets charged to the "interaction" term. Reported as non-converged rather than presented as an interaction effect.
+
+**Latency**, measured on the reference machine (Apple M4 Pro, 24 GB), across three full rehearsals: median 5.9–7.1s per pick against a 25s budget, tier 0 every time, zero demotions.
+
+### v1 projection benchmark
+
+These numbers come from the **v1 pipeline** (`scripts/run_benchmark.py`, now `v1_frozen`) and describe the projection ranking layer, not the v2 simulation engine. They are carried over from the previous README rather than re-measured on the current bundle — kept because the projection architecture carried forward, labeled because the pipeline that produced them did not.
+
+Ground truth is actual-season FPPG (availability-neutral, so injuries don't confound the ranking), paired per season across test seasons 2017–2024.
+
+| Metric | mean(engine − ADP) | Wilcoxon p | bootstrap 95% CI | Result |
+| --- | --- | --- | --- | --- |
+| NDCG@84 (full board) | **+0.062** | 0.0078 | [+0.048, +0.075] | PASS |
+| NDCG@36 (early rounds) | **+0.083** | 0.0078 | [+0.064, +0.102] | PASS |
+
+Engine beat ADP in 8 of 8 seasons. The honest ceiling: ~8–9 evaluable seasons is the hard limit of available NFL history, which is precisely why the v2 power audit rates most gates descriptive-only.
+
+---
 
 ## Setup
 
@@ -17,282 +257,203 @@ python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-`.env` in project root:
+That's everything the **draft cockpit** needs. `scripts/demo.sh`, `scripts/draft_night.py`, and `scripts/mock_draft.py` read a single self-contained parquet bundle and never open a socket — no database, no API key, no `.env`. That's a hard requirement, not a convenience: draft night happens on hotel wifi, and a tool that needs the network is a tool that fails when it matters.
+
+The database configuration below is only for **rebuilding** that bundle from source data.
+
+### Pipeline configuration
+
+`.env` in the project root:
 
 ```
-DATABASE_URL=postgresql://user:password@host:5432/dbname          # serving (Supabase)
-RESEARCH_DATABASE_URL=postgresql://localhost:5432/ff_research      # research (local PG)
-CFBD_API_KEY=your_key_here   # optional — enables college features
+DATABASE_URL=postgresql://user:password@host:5432/dbname       # serving (Supabase)
+RESEARCH_DATABASE_URL=postgresql://localhost:5432/ff_research  # research (local PG)
 ```
 
-League settings live in `config/league.yaml`.
+League settings — scoring, roster slots, payout structure — live in `config/league.yaml` and `config/strategy.yaml`. Changing either requires a full pipeline re-run; the config version hash is embedded in every model artifact so a stale bundle can't silently pair with a new config.
+
+### Optional: local narration
+
+Explanations run on a local model, so nothing leaves the machine and there's no API key:
+
+```bash
+ollama serve
+ollama pull qwen2.5:7b
+```
+
+Without it, the engine falls back to a plain table. Narration is never load-bearing.
 
 ### Two databases
 
 Storage is split so the hosted DB stays under Supabase's free-tier 500 MB cap:
 
-- **Research** (`RESEARCH_DATABASE_URL`, local Postgres) — full raw box scores,
-  features, labels, and backtest rows. The pipeline, training, and benchmarks
-  read and write this. ~640 MB.
-- **Serving** (`DATABASE_URL`, Supabase) — only what the API and live draft/weekly
-  serving read: players, adp, projections, weekly_projections, current-season
-  weekly_features, draft_sessions, latest snapshot. ~43 MB.
+- **Research** (`RESEARCH_DATABASE_URL`, local Postgres) — full raw box scores, features, labels, backtest rows. ~640 MB. The pipeline, training, and benchmarks read and write this.
+- **Serving** (`DATABASE_URL`, Supabase) — only what live serving reads. ~43 MB.
 
-`scripts/publish_serving.py` (the last pipeline step) copies the serving subset
-research → serving. If `RESEARCH_DATABASE_URL` is unset, both roles resolve to the
-same DB — the original single-DB behavior (used by the whole test suite). Start
-local Postgres with
-`/opt/homebrew/opt/postgresql@15/bin/pg_ctl -D /opt/homebrew/var/postgresql@15 start`.
+`scripts/publish_serving.py` copies the serving subset research → serving as the last pipeline step. If `RESEARCH_DATABASE_URL` is unset both roles resolve to the same DB, which is what the test suite uses.
 
-## Pipeline
-
-Each season: wipe the DB, then run the pipeline script.
-
-**Step 0 — wipe Supabase** (run in Supabase SQL Editor):
-
-```sql
-DROP SCHEMA public CASCADE;
-CREATE SCHEMA public;
-```
-
-**Step 1 — run full pipeline** (defaults to current year):
+Start local Postgres with:
 
 ```bash
-bash scripts/run_pipeline.sh
+/opt/homebrew/opt/postgresql@15/bin/pg_ctl -D /opt/homebrew/var/postgresql@15 start
 ```
 
-Or manually, step by step:
+### Building the bundle
+
+Draft night reads a single self-contained parquet bundle — no network, no database:
 
 ```bash
 python scripts/seed_db.py --start 2012 --end 2026
-python scripts/build_labels.py
 python scripts/build_features.py --start 2012 --end 2026
-python scripts/train_projection.py
-python scripts/run_benchmark.py --with-sim
-# weekly grain (start/sit)
-python scripts/build_weekly_data.py --start 2017 --end 2026
-python scripts/train_weekly_projection.py
-python scripts/run_weekly_benchmark.py --start 2017
+python scripts/train_projection_v2.py     # quantile GBM -> projections artifact
+python scripts/fit_models.py              # weekly sigma, hazard, K/DST, correlation
+python scripts/build_bundle.py --season 2026
 ```
 
-## Live Draft
+---
+
+## Running a draft
 
 ```bash
-python scripts/draft.py --season 2026 --position 4   # --position = your draft slot (1..teams)
-python scripts/draft.py --season 2026 --position 4 --resume   # continue an in-progress draft
+python scripts/draft_night.py --seat 4
+python scripts/draft_night.py --seat 4 --resume
 ```
 
-Commands during draft:
+Type a name to record whoever is on the clock. The board rebuilds by replay after every command, so `undo` always works and closing the terminal costs nothing.
 
-- `go` — auto-advance opponents by ADP (falls back to projection order when ADP is exhausted in late rounds) up to your next pick; blocked if it's your own turn
-- `me <player name>` — record your pick (fuzzy match; same-name players prompt to disambiguate by position/team)
-- `<player name>` — record an opponent's pick (on your turn, a bare name is recorded as **your** pick)
-- `skip` — advance the pick counter by one opponent pick without naming the player (useful when ADP is fully exhausted)
-- `undo` — revert the last command (a pick, a `go` batch, or a skip); state is rebuilt by replaying the pick log
-- `roster` — show your current team, open starter slots, and any bye-week stacks
-- `board` — reprint the recommendation board
-- `quit` — exit
+| Command | Effect |
+|---|---|
+| `<name>` | record the pick on the clock (fuzzy matched) |
+| `me <name>` | record my pick |
+| `go` | recommend now (automatic when I'm on the clock) |
+| `board [n]` | print the top n available |
+| `roster` | print my roster |
+| `zero <name>` | injury/news: this player is worthless, no restart |
+| `adp <name> <n>` | override a player's ADP |
+| `undo` | undo the last command |
+| `log` | show the decision ledger |
+| `quit` | exit |
 
-The header shows `** YOUR PICK (round N) **` when it's your turn, so you know to use `me <name>` instead of `go`.
+**Sessions are event-sourced.** State is a pure function of the event log, so `undo` is a pop-and-replay rather than a hand-maintained inverse operation, and a crash costs nothing — the log is written atomically after every command.
 
-**Crash-safe**: every pick is written to `draft_state_<season>_slot<pos>.json` as it happens. If the CLI dies mid-draft (network blip, accidental Ctrl-C), relaunch with `--resume` to pick up exactly where you left off. The save file is the same event log that powers `undo`.
+**Names resolve through a cascade**: exact id → manual override (`config/id_overrides.yaml`) → deterministic normalization → fuzzy (`token_sort_ratio`) → unresolved. An unresolvable name is *recorded as unresolved* rather than dropped, so the board stops offering a player who's actually gone.
 
-At each of your picks it shows the **top 10** candidates with a **FIT** score and the gap to the top pick, so you decide rather than blindly taking #1:
-
-```
-  Round 1  (risk quantile 0.25)
-   #  PLAYER             POS    FIT     Δ#1   proj    ADP   wait
-   1  Justin Jefferson   WR    2.97     —    12.4   10.1   0.44
-   2  Puka Nacua         WR    1.06   -1.91  15.3    3.0   0.44
-   3  Ja'Marr Chase      WR    0.91   -2.06  15.6    3.1   0.44
-   4  A.J. Brown         WR    0.58   -2.39  13.1   18.4   0.44
-   5  Travis Kelce       TE    0.17   -2.80   8.1   42.0   1.23
-   ... (top 10 shown)
-   read: CLEAR #1 — leads #2 by 1.91
-   runs (picks 1→13, 12 picks): QB 1! | RB 4 | WR 6 | TE 2
-```
-
-- **FIT** — the VONA fit-for-your-roster score (higher = better pick now).
-- **Δ#1** — gap to the top pick; small gaps across the board mean the choices are about equal.
-- **proj** — the risk-adjusted projection at this round's target quantile; **ADP** — the market's average draft position, so you can see where FIT disagrees with the market.
-- **wait** — the VONA wait term: the expected VOR of the best same-position player surviving to your next pick. Low wait = scarce position (grab now); high wait = deep position (safe to wait). Same value for all players at the same position.
-- **read** — auto-classifies the spread: _CLEAR #1_ (leads #2 by ≥1.0), _TOSS-UP_ (top 10 within 0.5 → pick your preference), or a _slight edge_ in between.
-- **runs** — how many players at each position the market expects to go before your next pick (`!` = 0–1 left, i.e. that position is running out).
-
-## Weekly Start/Sit ("Who Should I Start?")
-
-Once the season starts, the weekly model answers the other hard question: who goes in the lineup this week. Two commands per week:
-
-```bash
-python scripts/project_week.py --season 2026 --week 5          # 1. project the upcoming week
-python scripts/start.py --season 2026 --week 5 --roster my_team.yaml   # 2. optimize the lineup
-```
-
-Or refresh data + project in one shot (run Tuesdays, after the previous week's stats land):
-
-```bash
-bash scripts/update_week.sh 2026 5    # re-seed stats → rebuild weekly grain → project week 5
-```
-
-`project_week.py` builds as-of-kickoff features for the target week (rolling in-season stats, opponent DvP, Vegas lines, season-P50 prior), trains on all strictly-prior weeks, and writes forward projections (`weekly_fwd_v1.*`). `start.py` then solves the lineup as a small ILP — exact slot assignment, FLEX included — and prints START/BENCH verdicts with matchup grades.
-
-Your roster lives in a YAML file:
-
-```yaml
-season: 2026
-roster:
-  - { name: Josh Allen, position: QB, team: BUF }
-  - { name: Bijan Robinson, position: RB, team: ATL }
-  - { name: Amon-Ra St. Brown, position: WR, team: DET }
-  - { name: Travis Kelce, position: TE, team: KC, status: questionable }
-  # ... status IR/OUT excludes a player from the lineup
-```
-
-Options:
-
-- `--strategy safe|balanced|upside` — maximize P10 (floor), P50 (median, default), or P90 (ceiling). Chasing a comeback? `upside`. Protecting a lead? `safe`.
-- `compare "Player A" vs "Player B"` — head-to-head: quantiles, matchup grade, and a verdict (< 1 pt median gap is called a TOSS-UP rather than a fake edge).
-- Falls back to season projections (flagged as such) if weekly projections don't exist for that week.
-
-**Two-layer model**: the season P50 projection enters the weekly model as a prior feature; the weekly GBM learns how far to adjust it given in-season context. Same pooled quantile architecture, same rearrangement monotonicity, split-conformal calibration by position bucket. All backward-looking features pass through `leakage_guard.prior_weeks()` — nothing from the target week or later ever enters the matrix.
+---
 
 ## Architecture
 
-**ADP wall**: `src/projection/` and `src/features/` never import the `adp` module — the **draft market** (ADP) stays quarantined so the engine is measured against it, never trained on it. Only `src/ingest/adp.py`, `src/recommender/`, and `src/benchmark/` may touch ADP.
+Six layers, imports strictly downward, enforced by `tests/test_layer_deps.py`:
 
-**Team scoring context** (deliberate market signal, *not* an ADP-wall violation): `src/features/team_context.py` adds a forward-looking view of each player's offense from the **Week-1 betting line** (nflverse `total_line`/`spread_line`) — `team_ctx_implied_pts = total_line/2 ± spread_line/2`, plus the game total and the team's spread. Week-1 lines are posted pre-kickoff, so it's a preseason-safe artifact (like the Week-1 depth chart), attached to each player by their season-Y team. This intentionally puts *game-line* market data into the projection features (the ADP/draft-market wall is untouched); it prices the offseason roster/coaching changes lagged production can't see. Uses `total_line`/`spread_line` only — never `total` (the final score, which would leak).
+```
+app       (L5)  cockpit, narration
+engine    (L4)  decision, sim, audit
+models    (L3)  projection, weekly, correlation, opponents
+platform  (L2)  identity, bundle, asof
+domain    (L1)  scoring, roster, payout
+core      (L0)  config, errors, constants
+```
 
-**Model**: one pooled `QuantileGBM` (position as categorical feature) — not per-position models. Quantile monotonicity via rearrangement (Chernozhukov 2010), not clipping.
+(v1 packages — `projection/`, `features/`, `recommender/`, `ingest/`, and friends — still sit alongside these. They're tracked in a `LEGACY_PACKAGES` set that the layer test asserts can only ever *shrink*, so the migration can't silently stall.)
 
-**Recommender**: VONA score = marginal VOR − E[best same-position surviving to next pick]. ADP survival via log-normal distribution. Round-shifted quantile (P25 early → P85 late).
+**The ADP wall is structural, not a convention.** The draft market must never reach the projection model, or the engine ends up measured against a signal it was trained on. Rather than a code-review rule, `models/**` may import exactly one platform module — `platform.asof`. That single clause buys three guarantees at once: no ADP import (ADP lives in `platform.sources`), no DB access (`platform.persistence`), and point-in-time discipline, since `asof` is the only door. Enforced by `test_layer_deps.py` and `test_leakage.py`.
 
-## Benchmark Results
+**Leakage.** Feature columns may only use data available before Week 1 of the target season. In-season stats in a preseason feature is a fatal research bug, and the guard is a test rather than discipline.
 
-Pre-registered gate: **NDCG@k**, paired per season, with Wilcoxon signed-rank / sign tests and a bootstrap 95% CI (see [Glossary](#glossary)). Ground-truth relevance is **actual-season FPPG** (availability-neutral, so injuries don't confound the ranking). Reported on the data-complete era — test seasons **2017–2024** (8 evaluable seasons, after the 5-season cross-validation warmup). Current snapshot: **3,386 projections**.
+**Snapshot reproducibility.** Every DB write and every artifact carries a `snapshot_id`. nflverse retroactively corrects historical stats, so "the same query" is not reproducible without one.
 
-### Tier-1 — projection ranking vs ADP (per season, k = 84)
+**Quantile monotonicity.** P10 ≤ P50 ≤ P90 is enforced by rearrangement and tested. It's easy to violate accidentally — an early elasticity knob scaled P50 past P90, which clamped the split-normal inverse CDF to zero and deleted the upper tail, moving a reported value in the *wrong direction*.
 
-| Season | n   | NDCG@84 engine | NDCG@84 ADP | Spearman engine | Spearman ADP | Hit@84 engine | Hit@84 ADP |
-| ------ | --- | -------------- | ----------- | --------------- | ------------ | ------------- | ---------- |
-| 2017   | 136 | 0.889          | 0.851       | 0.632           | 0.425        | 0.762         | 0.714      |
-| 2018   | 144 | 0.904          | 0.866       | 0.645           | 0.412        | 0.738         | 0.655      |
-| 2019   | 148 | 0.946          | 0.866       | 0.734           | 0.470        | 0.810         | 0.702      |
-| 2020   | 141 | 0.931          | 0.855       | 0.759           | 0.477        | 0.798         | 0.762      |
-| 2021   | 150 | 0.943          | 0.860       | 0.739           | 0.538        | 0.821         | 0.702      |
-| 2022   | 131 | 0.925          | 0.882       | 0.773           | 0.551        | 0.810         | 0.821      |
-| 2023   | 156 | 0.923          | 0.881       | 0.693           | 0.530        | 0.821         | 0.762      |
-| 2024   | 160 | 0.918          | 0.839       | 0.673           | 0.471        | 0.750         | 0.631      |
+---
 
-**Tier-1 gate (paired across 8 seasons):**
-
-| Metric                 | mean(engine − ADP) | Wilcoxon p | sign-test p | bootstrap 95% CI | Result   |
-| ---------------------- | ------------------ | ---------- | ----------- | ---------------- | -------- |
-| NDCG@84 (full board)   | **+0.062**         | 0.0078     | 0.0078      | [+0.048, +0.075] | **PASS** |
-| NDCG@36 (early rounds) | **+0.083**         | 0.0078     | 0.0078      | [+0.064, +0.102] | **PASS** |
-
-Engine beats ADP in **8 of 8** seasons. Honest ceiling: ~8–9 evaluable seasons is the hard limit of available NFL history — not "many" — so significance is taken across season × player cross-sections.
-
-### Tier-3 — risk calibration (interval honesty)
-
-| Bucket           | n    | P10–P90 coverage | nominal |
-| ---------------- | ---- | ---------------- | ------- |
-| overall          | 3386 | 0.804            | 0.80    |
-| established_vet  | 1646 | 0.801            | 0.80    |
-| rookie           | 479  | 0.804            | 0.80    |
-| second_year      | 566  | 0.802            | 0.80    |
-| team_changed_vet | 695  | 0.816            | 0.80    |
-
-Coverage is from the **split-conformal per-bucket** calibrator (`src/projection/calibrate.py`), validated on the 2026-06-27 run (with the `team_context` feature). The width scale per side is a quantile of the normalized nonconformity score (residual ÷ predicted half-width), which targets the empirical coverage fraction directly — unlike the earlier mean-matching scale, which left intervals narrow (~0.77, rookies worst at 0.756) because matching *mean* half-widths under-covers whenever per-row widths are heterogeneous (exactly the rookie case). Every bucket now sits on the 0.80 nominal; the rookie bucket — the whole reason for per-type calibration — went 0.756 → 0.804. The calibrator only ever widens (scale floored at 1.0), so well-calibrated buckets are left untouched.
-
-### Tier-2 — recommender vs ADP bots
-
-Draft simulation: our recommender vs 11 bots drafting by ADP, on `SIM_ELIGIBLE` seasons, rosters scored availability-neutral (starting-lineup FPPG). Across **35 (season × slot) drafts**:
-
-| Metric              | mean(ours − bots) | Wilcoxon p | bootstrap 95% CI | wins    | Result   |
-| ------------------- | ----------------- | ---------- | ---------------- | ------- | -------- |
-| Starting-lineup PPG | **+4.74**         | 0.000277   | [+2.64, +6.94]   | 28 / 35 | **PASS** |
-
-The recommender — not just the engine — beats the market. Adding the `team_context` market feature lifted this tier (mean edge +3.97 → +4.74, win rate 25 → 28 of 35, p 0.0014 → 0.000277) while leaving Tier-1 flat within its CI. Down years like 2024 still pull the mean, but the paired edge is robust.
-
-### Weekly — lineup benchmark (points left on bench)
-
-Simulated rosters (snake-draft, averaged over early/mid/late draft slots), lineups set each week from OOF weekly projections, then scored against what actually happened:
-
-| Metric                    | Result | Target | Gate     |
-| ------------------------- | ------ | ------ | -------- |
-| Mean pts left on bench    | 18.38  | < 20.0 | **PASS** |
-| Optimal starter hit rate  | 67.5%  | —      | —        |
-
-Weekly OOF interval coverage sits at 0.798–0.812 per position bucket against the 0.80 nominal, under leave-one-fold-out calibration (each season calibrated only on the *other* seasons, so reported coverage can't flatter itself).
-
-## API
-
-FastAPI service exposing the draft recommender (backend for the web draft room).
+## Testing
 
 ```bash
+venv/bin/pytest              # 859 tests, v2 engine
+venv/bin/pytest -m v1_frozen # 91 tests, frozen v1 surfaces
+```
+
+Both suites pass. The interesting tests aren't the ones that check a function returns the right number — they're the ones that try to break an invariant:
+
+- **`test_ledger.py`** tampers with the chain: edits a recommendation, deletes an entry, and asserts verification names the *first* broken link.
+- **`test_leakage.py`** walks the import graph and fails if the ADP wall is crossed.
+- **`test_truncated_rebuild.py`** rebuilds a season's features with data truncated at Week 0 and asserts the result is identical — mutation testing found three independent guard layers, and only disabling all three makes it fail.
+- **`test_sim_kernel.py`** asserts extending a draw reuses its prefix and that normals come from inverse-CDF, which is what makes CRN valid.
+- **`test_layer_deps.py`** parses every import and enforces the layer DAG.
+- **`tests/oracles/ilp_lineup.py`** keeps the v1 ILP as a test oracle for the greedy lineup selector — greedy is optimal on a transversal matroid, and the oracle proves it on random rosters.
+
+`test_latency_budget.py` is marked slow and excluded from the default run; it's exercised explicitly by the chaos rehearsals.
+
+---
+
+## Known limitations
+
+Stated because they're real, not because they're exhaustive.
+
+**K and DST are never drafted.** Kickers and defenses aren't in `modeled_positions`, so they enter the board with `value = 0.0` and score 0 in the VONA shortlist, which means the simulator never evaluates one. The simulator itself prices them correctly (K at 8.04 pts/wk from a fitted empirical distribution) — the gap is in `scripts/build_bundle.py`, which should patch from the `kdst_*.json` artifact the way `scripts/simulate.py` already does. Streaming both off waivers is a defensible strategy, so the *output* is reasonable; the reasoning behind it is not.
+
+**The waiver floor is not wired in.** `src/engine/sim/waiver.py` is built and tested but the kernel never calls it, so mid-season replacement isn't currently modeled.
+
+**The opponent model is league-mean.** Per-manager tendencies failed their pre-registered gate (p = 0.135) and were not built.
+
+**Sobol indices don't converge**, for the structural reason described above.
+
+**Yahoo integration is blocked** pending API permission: the `exact_id` identity tier, live draft polling, and validation against real league rosters all depend on it.
+
+**Deferred by design:** stat-line multi-target projection, college/rookie production features, kicker↔offense coupling, handcuff conditional distributions.
+
+---
+
+## Legacy v1 surfaces
+
+An earlier version shipped a weekly start/sit optimizer, a FastAPI service, and a Next.js draft room. They're pinned to the v1 config shape and excluded from the default test run (`addopts = "-m 'not v1_frozen'"`), and they still pass under `pytest -m v1_frozen`. Thawing them onto the v2 config is noted as a follow-up, not built.
+
+```bash
+python scripts/draft.py --season 2026 --position 4      # v1 draft CLI
+python scripts/start.py --season 2026 --week 5 --roster my_team.yaml
 venv/bin/uvicorn api.main:app --reload --port 8000
+cd web && npm install && npm run dev
 ```
 
-- `GET /health` — liveness
-- `GET /players?season=2026` — draft board (projections + ADP + names)
-- `POST /draft/sessions` `{"season": 2026, "draft_position": 4}` — start a session
-- `GET /draft/sessions/{id}` — full state (picks, roster, whose turn)
-- `POST /draft/sessions/{id}/picks` `{"player_id": "..."}` or `{"skip": true}` — record a pick
-- `POST /draft/sessions/{id}/undo` — pop the last command
-- `GET /draft/sessions/{id}/recommendations?top_n=10` — ranked VONA board
+---
 
-Sessions are event-sourced in the `draft_sessions` table (same history format as
-the CLI save files); state is rebuilt by replay on every read.
-CORS origins via `ALLOWED_ORIGINS` (default `http://localhost:3000`).
-`POST /draft/sessions/{id}/bot-pick` advances one ADP-bot opponent (demo mode).
+## Data sources
 
-## Web
-
-Next.js draft room + zero-login mock-draft demo + landing page in [`web/`](web/README.md).
-It is a pure REST client of the API above.
-
-```bash
-cd web && npm install && npm run dev   # http://localhost:3000  (needs the API on :8000)
-```
-
-## Data Sources
-
-- [nflverse](https://www.nflverse.com/) — play-by-play, rosters, combine, draft picks, **Week-1 betting lines** (`total_line`/`spread_line`, 100% coverage 2012–2025) for team scoring context
+- [nflverse](https://www.nflverse.com/) — play-by-play, rosters, schedules, Week-1 betting lines
 - [Fantasy Football Calculator](https://fantasyfootballcalculator.com/) — full-PPR ADP
-- [CFBD](https://collegefootballdata.com/) — college stats (optional)
+
+---
 
 ## Glossary
 
-**Scoring & fantasy terms**
+**Fantasy terms**
 
-- **PPR** — Points Per Reception: scoring that awards 1 point per catch.
-- **ADP** — Average Draft Position: where a player is drafted on average across thousands of public drafts. The market baseline this project aims to beat.
-- **FPPG** — Fantasy Points Per Game: the model's prediction target (a per-game _rate_, not a season total — so it isn't distorted by missed games).
-- **VOR** — Value Over Replacement: a player's projected value minus a freely-available "replacement" player at his position (the first one who doesn't earn a starting slot).
-- **VONA** — Value Of Not Available: VOR _now_ minus the expected value of the best same-position player still available at your _next_ pick. Encodes "take the scarce position now, wait on the deep one."
-- **FIT** — the draft UI's per-player number: a player's VONA score at your current pick. Higher = better fit for your roster right now; the spread across the top 10 shows whether one pick clearly dominates or the choices are about equal.
-- **DvP** — Defense vs Position: how many fantasy points a defense has allowed to each position so far this season. Drives the weekly matchup grade (A/B/C).
-- **ILP** — Integer Linear Program: the exact optimizer behind start/sit. Assigns each rostered player to a starting slot (or bench) to maximize the chosen quantile's total, with FLEX eligibility as a constraint.
+- **PPR** — Points Per Reception; 1 point per catch.
+- **ADP** — Average Draft Position: where a player goes on average across thousands of public drafts. The market baseline this project is measured against.
+- **FPPG** — Fantasy Points Per Game; the prediction target. A per-game *rate*, so missed games don't distort it.
+- **VOR / VONA** — Value Over Replacement; Value Of Next Available (VOR now, minus the expected value of the best same-position player still there at your next pick). VONA is the tier-2 fallback ranking.
+- **Streaming** — picking up a kicker or defense off waivers each week instead of drafting one.
 
 **Model terms**
 
-- **GBM** — Gradient-Boosted (decision) trees Model; an ensemble of trees built sequentially.
-- **LightGBM** — a fast, widely-used GBM implementation (the model used here).
-- **P10 / P50 / P90** — the 10th / 50th (median) / 90th percentile of a player's predicted outcome: the low / middle / high cases. The model predicts a _range_, not one number.
-- **Snapshot** — a frozen extraction of source data (tagged with a `snapshot_id`) so results stay reproducible even though nflverse retroactively corrects past stats.
+- **P10 / P50 / P90** — 10th / 50th / 90th percentile of a player's predicted outcome. The model predicts a range, not a number.
+- **Quantile GBM** — gradient-boosted trees trained with pinball loss to predict a quantile directly.
+- **Rearrangement** — sorting crossed quantile predictions back into order (Chernozhukov 2010); preserves calibration in a way clipping does not.
+- **Split conformal** — calibrating interval width on held-out residuals so stated coverage matches empirical coverage.
+- **Snapshot** — a frozen extraction of source data tagged with a `snapshot_id`, so results stay reproducible even though nflverse retroactively corrects past stats.
 
-**Metrics**
+**Simulation terms**
 
-- **NDCG@k** — Normalized Discounted Cumulative Gain over the top _k_ players: a 0–1 ranking-quality score that weights the top of the list most heavily (getting pick #1 right matters more than #95). The primary gate metric; `k=84` ≈ the startable universe, `k=36` ≈ the early rounds.
-- **Spearman** — Spearman rank correlation between the predicted order and the actual finish (−1 to +1; higher is better).
-- **Hit@k** — Hit rate: the fraction of the true top-_k_ players that the ranking also placed in its top _k_.
-- **Pinball loss** — the standard quantile-regression loss; lower means a better-calibrated quantile (P10/P50/P90).
-- **Coverage** — the fraction of actual outcomes that fell inside the predicted P10–P90 interval (target = 0.80).
-- **Bootstrap 95% CI** — a confidence interval estimated by resampling; if it excludes 0, the measured edge is unlikely to be noise.
-- **Wilcoxon signed-rank / sign test** — paired non-parametric significance tests comparing engine vs ADP across seasons.
+- **CRN (Common Random Numbers)** — comparing alternatives on identical random draws so the comparison isn't swamped by simulation noise.
+- **Aleatory vs epistemic** — noise from the simulation (shrinks with more replications) vs uncertainty in the fitted parameters (does not).
+- **Successive halving** — an allocator that repeatedly discards the worst candidates and reinvests their budget in survivors.
+- **PIT (Probability Integral Transform)** — mapping outcomes through their predicted CDF. If the distribution is right, the result is uniform; the shape of the deviation says *how* it's wrong.
+- **Kish design effect** — `1 + (m-1)ρ`; how much clustering inflates variance, and therefore how many of your nominal samples are real.
+- **Sobol indices** — variance-based sensitivity analysis attributing output variance to each input and their interactions.
 
-**Data sources**
+**Statistics**
 
-- **CFBD** — College Football Data API (college statistics for rookies).
-- **nflverse** — open NFL data project, accessed via the `nflreadpy` Python library.
-- **Fantasy Football Calculator (FFC)** - full PPR ADP.
+- **NDCG@k** — a 0–1 ranking-quality score weighting the top of the list most heavily. `k=84` ≈ the startable universe; `k=36` ≈ the early rounds.
+- **MDE** — Minimum Detectable Effect: the smallest true effect a test could reliably find at the stated power. If your expected effect is below the MDE, a null result means nothing.
+- **Power** — probability of detecting a real effect of the expected size. Below ~0.5 here, a gate is reported descriptively rather than claimed.
+- **Wilcoxon signed-rank** — paired non-parametric significance test.
+- **KS test** — Kolmogorov–Smirnov; tests whether a sample matches a reference distribution (used on the PIT histogram).

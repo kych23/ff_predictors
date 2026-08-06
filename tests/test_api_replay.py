@@ -1,5 +1,13 @@
 """Replay is a pure function of (history, board): picks land on the right roster,
 skips consume a pick slot, and replay order matches incremental application."""
+
+import pytest
+
+# §9.4: this module is pinned to the v1 config shape. api/, web/ and the
+# weekly start/sit surface are FROZEN for the build window, so v1 stays
+# alive underneath them and these tests are deselected from the default
+# run rather than migrated. Thaw is a §22.2 follow-up.
+pytestmark = pytest.mark.v1_frozen
 import pandas as pd
 
 from api.replay import apply_event, replay_history

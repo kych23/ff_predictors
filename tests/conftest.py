@@ -8,8 +8,22 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from api.db_models import DraftSession
-from src.db.models import Base
+# §9.4: importing api.db_models at COLLECTION time couples the whole suite to
+# the frozen api package, so marker deselection alone cannot decouple it. The
+# import moves into the fixtures that actually need it.
+
+
+def _frozen_api_models():
+    """Import the frozen api models lazily, skipping if unavailable.
+
+    Returns (Base, DraftSession) so the fixture body needs no module-level
+    names from the frozen package.
+    """
+    pytest.importorskip("api.db_models")
+    from api.db_models import DraftSession
+    from src.db.models import Base
+
+    return Base, DraftSession
 
 
 @pytest.fixture()
@@ -21,7 +35,8 @@ def sqlite_engine():
     eng = create_engine("sqlite:///:memory:", future=True,
                         connect_args={"check_same_thread": False},
                         poolclass=StaticPool)
-    Base.metadata.create_all(eng, tables=[DraftSession.__table__])
+    base, draft_session = _frozen_api_models()
+    base.metadata.create_all(eng, tables=[draft_session.__table__])
     yield eng
     eng.dispose()
 

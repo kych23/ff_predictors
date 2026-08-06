@@ -162,7 +162,17 @@ simulation:
     demote_to_tier1_after_seconds: 18
   narration:
     enabled: true
-    model: claude-opus-5
+    # LOCAL model by default. §19 requires the recommendation path to work
+    # offline, and a hosted API call breaks that at the worst possible moment:
+    # draft night, on somebody's hotspot. Measured on 30 synthetic attribution
+    # records (scripts/bench_narration.py): 97% of narrations survive the §18
+    # entailment gate, 2.9s median.
+    #
+    # backend: auto | ollama | anthropic | table
+    #   auto  -> local if Ollama is up, else hosted if a key is set, else table
+    #   table -> deterministic, no model at all; always a legitimate choice
+    backend: auto
+    model: qwen2.5:7b # `ollama pull qwen2.5:7b`; claude-opus-5 for anthropic
     max_tokens: 400
     gate_on_entailment: true
     tolerances: { dollars: 0.05, probability: 0.02, week: 0, slot: 0 }

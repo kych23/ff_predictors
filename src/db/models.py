@@ -233,3 +233,50 @@ class AdpCoverage(Base):
     ranking_eligible = Column(Boolean, nullable=False, default=False)
     sim_eligible = Column(Boolean, nullable=False, default=False)
     snapshot_id = Column(String, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# §20.2 — simulation provenance. RESEARCH DB ONLY.
+#
+# These two tables answer "what produced this number?" months later. They are
+# excluded from the serving database by `init_db.RESEARCH_ONLY_TABLES`: the
+# serving DB is a 500 MB free tier holding a draft-night subset, and a row per
+# simulation run would consume it for data the API never reads.
+# ---------------------------------------------------------------------------
+
+
+class BlobManifest(Base):
+    """One row per raw source blob pulled into a snapshot (§11.1, §20.2).
+
+    `snapshot_id` is a merkle root over these digests, so this table is what
+    makes the root re-derivable rather than merely asserted.
+    """
+
+    __tablename__ = "blob_manifest"
+
+    snapshot_id = Column(String, primary_key=True)
+    source = Column(String, primary_key=True)
+    logical_asset = Column(String, primary_key=True)
+    # Distinguishes two pulls of the same asset with different arguments
+    # (seasons=[2024] vs seasons=[2025]); without it they collide on the PK.
+    params_key = Column(String, primary_key=True)
+    digest = Column(String, nullable=False)
+    fetched_at = Column(DateTime, nullable=False, server_default=func.now())
+    canonicalizer = Column(String, nullable=False)
+
+
+class SimRun(Base):
+    """One row per simulation that produced a recommendation (§17.4, §20.2)."""
+
+    __tablename__ = "sim_runs"
+
+    id = Column(String, primary_key=True)
+    snapshot_id = Column(String, nullable=False)
+    model_version = Column(String, nullable=False)
+    decision_version = Column(String, nullable=False)
+    seed_root = Column(String(32), nullable=False)   # 32-char lowercase hex
+    inner_seasons = Column(Integer, nullable=False)
+    draws_used = Column(Integer, nullable=False)
+    correlation_source = Column(String, nullable=False)
+    stage_timings_ms = Column(JSONB, nullable=True)  # §7.1 stage keys
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
