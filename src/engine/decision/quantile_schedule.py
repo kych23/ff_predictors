@@ -1,4 +1,4 @@
-"""Round -> risk appetite schedule (DrafterSpec.md §4.8.1 / Fork 1).
+"""Round -> risk appetite schedule.
 
 Swaps the point estimate for a round-shifted quantile: floor-leaning early (~P25,
 protect starters) shifting to ceiling-leaning late (~P85, upside swings). One

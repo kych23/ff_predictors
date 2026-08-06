@@ -1,8 +1,8 @@
 """Feature assembly — the single (player, Y) assembly point
 
 Joins prior-production and role-change blocks for season ``Y``; attaches
-``age_at_season_start`` (explicit feature, §4.5 Age note), sets the row's position
-**as of season Y** and a ``position_changed`` flag (§4.0), enforces the as-of /
+``age_at_season_start`` (explicit feature Age note), sets the row's position
+**as of season Y** and a ``position_changed`` flag, enforces the as-of /
 leakage rule at this boundary, and emits the ``season_features`` rows (feature set
 as opaque JSONB).
 
@@ -200,7 +200,7 @@ def assemble_season(
     df["is_rookie"] = df["is_rookie"].astype(bool)
     df["as_of_date"] = as_of_date.isoformat()
 
-    # restrict to modeled positions (K/DEF never modeled, §4.2.1)
+    # restrict to modeled positions (K/DEF never modeled)
     df = df[df["position"].isin(cfg.roster.modeled_positions)].copy()
 
     # pack features into JSONB (vectorized: to_dict beats iterrows ~10x here)

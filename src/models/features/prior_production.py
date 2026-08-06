@@ -1,9 +1,9 @@
-"""Cross-season prior-production features (DrafterSpec.md §4.5.1).
+"""Cross-season prior-production features.
 
 The stable, most-predictive block. Aggregates volume/efficiency/fppg from seasons
 ``< Y`` into **rates** (per-game / per-opportunity, never season totals) so 16- and
-17-game eras mix without distortion (§4.4.3), then EWMA-decays across seasons with
-``ewm_halflife_seasons`` (config, tuned on CV folds — §4.6.1) so recent seasons
+17-game eras mix without distortion, then EWMA-decays across seasons with
+``ewm_halflife_seasons`` (config, tuned on CV folds — ) so recent seasons
 weigh more. Output: one row per ``player_id`` with ``prior_*``-style columns.
 
 
@@ -132,7 +132,7 @@ def _season_aggregates(stats: pd.DataFrame, pfr_to_gsis: Optional[Dict[str, str]
     return agg
 
 
-# The rate columns carried forward via EWMA (all §4.5.1 prior_production features).
+# The rate columns carried forward via EWMA (all prior_production features).
 RATE_FEATURES = [
     "fppg", "snap_share", "target_share", "targets_per_game",
     "carry_share", "carries_per_game", "touches_per_game",

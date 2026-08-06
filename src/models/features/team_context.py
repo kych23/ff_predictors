@@ -1,4 +1,4 @@
-"""Market team scoring-context feature (DrafterSpec.md §4.5).
+"""Market team scoring-context feature.
 
 A FORWARD-LOOKING, market-based view of the offense each player sits in for season Y,
 derived from the **Week-1 betting line** (nflverse schedules ``total_line`` /

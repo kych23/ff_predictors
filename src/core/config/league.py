@@ -1,4 +1,4 @@
-"""Typed loader for ``config/league.v2.yaml`` (§10.2, §10.4, §10.5).
+"""Typed loader for ``config/league.yaml`` (§10.2, §10.4, §10.5).
 
 Everything here is model-affecting by construction, which is why the version
 hash has no exclusion list: the v1 loader excluded ``max_per_position`` so that
@@ -21,7 +21,7 @@ from src.core.constants import CALIBRATION_BUCKETS, SLOT_BENCH
 from src.core.errors import ConfigError
 
 _REPO_ROOT: Final = Path(__file__).resolve().parents[3]
-DEFAULT_LEAGUE_PATH: Final = _REPO_ROOT / "config" / "league.v2.yaml"
+DEFAULT_LEAGUE_PATH: Final = _REPO_ROOT / "config" / "league.yaml"
 
 _REQUIRED_SECTIONS: Final = frozenset({
     "league", "roster", "schedule", "scoring", "training", "weekly", "backtest",

@@ -1,4 +1,4 @@
-"""Fixed preseason replacement level via greedy lineup-fill (DrafterSpec.md §4.8.1).
+"""Fixed preseason replacement level via greedy lineup-fill.
 
 The recommender's most important calculation — it owns STRUCTURAL scarcity (RB cliff
 vs QB depth, a preseason truth). Replacement is computed ONCE from preseason

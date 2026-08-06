@@ -1,4 +1,4 @@
-"""VONA — Value Of Not Available, the core scoring loop (DrafterSpec.md §4.8.1).
+"""VONA — Value Of Not Available, the core scoring loop.
 
 score(p) = marginal starting-lineup value of p to MY roster
            − E[marginal value of the best same-position player still available at my
@@ -10,7 +10,7 @@ intra-draft scarcity; fixed replacement (replacement.py) owns structural scarcit
 one effect, one place, no double-count (§3).
 
 At the last pick (no next pick), the wait term is defined as 0, so score reduces to
-pure marginal lineup value (§4.8.1).
+pure marginal lineup value.
 
 
 PORTED from src/recommender/vona.py (DraftEngineDesign.md §9.2).

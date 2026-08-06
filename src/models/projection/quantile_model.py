@@ -1,13 +1,13 @@
-"""Pooled quantile GBM — the forecasting core (DrafterSpec.md §4.6.1).
+"""Pooled quantile GBM — the forecasting core.
 
 One pooled LightGBM per quantile (P10/P50/P90) trained across ALL positions with
 ``position`` as a categorical feature — NOT four per-position models (small-N TE/QB
-would overfit; §4.6.1). Trees split on ``position`` where data supports and borrow
+would overfit; ). Trees split on ``position`` where data supports and borrow
 strength elsewhere; per-position rank is taken after inference.
 
 Quantile crossing is fixed by **rearrangement** (sorting the three predictions per
 row), NOT clipping — clipping is asymmetric and biases the interval, which feeds the
-recommender's risk math (Chernozhukov et al. 2010, §4.6.1).
+recommender's risk math (Chernozhukov et al. 2010).
 
 
 PORTED from src/projection/quantile_model.py (DraftEngineDesign.md §9.2).

@@ -1,7 +1,7 @@
-"""Projection metrics, shared with the benchmark (DrafterSpec.md §4.6/§4.7.1).
+"""Projection metrics, shared with the benchmark.
 
 Ports the old regression metrics and adds the ranking metrics the gate needs:
-NDCG@k (primary gate metric, §4.7.1), Spearman, top-N hit rate, and pinball
+NDCG@k (primary gate metric), Spearman, top-N hit rate, and pinball
 (quantile) loss for risk calibration.
 
 
@@ -40,7 +40,7 @@ def dcg_at_k(relevance: np.ndarray, k: int) -> float:
 def ndcg_at_k(scores, relevance, k: int) -> float:
     """NDCG@k: rank items by ``scores``, reward by true ``relevance`` (actual FPPG).
 
-    Primary Tier-1 gate metric (§4.7.1) — draft value is dominated by the top of
+    Primary Tier-1 gate metric — draft value is dominated by the top of
     the board, so this weights getting the top right.
     """
     scores = np.asarray(scores, dtype=float)

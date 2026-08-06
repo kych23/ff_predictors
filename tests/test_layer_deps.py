@@ -40,12 +40,13 @@ LAYER_RANK: dict[str, int] = {
 #: (asof is the only door).
 MODELS_PLATFORM_ALLOW: frozenset[str] = frozenset({"src.platform.asof"})
 
-#: v1 packages not yet migrated into the layer scheme. Phase 5 empties this;
-#: it is asserted to only ever shrink so the migration cannot silently stall.
-LEGACY_PACKAGES: frozenset[str] = frozenset({
-    "benchmark", "config", "db", "features", "ingest",
-    "labels", "lineup", "projection", "recommender",
-})
+#: The v1 packages (benchmark, config, db, features, ingest, labels, lineup,
+#: projection, recommender) were deleted outright rather than migrated, so this
+#: is empty and `test_src_contains_only_layers` now keeps it that way: any new
+#: top-level package under src/ is a layer or it is a bug. That is a stronger
+#: guarantee than the shrinking-allowlist it replaces, which could stall at a
+#: non-empty set forever without failing anything.
+LEGACY_PACKAGES: frozenset[str] = frozenset()
 
 
 def _module_name(path: Path) -> str:
@@ -212,6 +213,24 @@ def test_every_layer_package_exists() -> None:
     creating a new top-level package by accident."""
     missing = [name for name in LAYER_RANK if not (SRC / name).is_dir()]
     assert not missing, f"missing layer packages: {missing}"
+
+
+def test_src_contains_only_layers() -> None:
+    """`src/` is exactly the six layers — nothing else.
+
+    This is what replaces the old shrinking `LEGACY_PACKAGES` allowlist. The
+    allowlist could sit at a non-empty set indefinitely without failing; this
+    cannot. A new top-level package is now a test failure at the moment it is
+    created, which is the only time it is cheap to move.
+    """
+    extras = sorted(
+        p.name for p in SRC.iterdir()
+        if p.is_dir() and p.name != "__pycache__" and p.name not in LAYER_RANK
+    )
+    assert not extras, (
+        f"non-layer packages under src/: {extras}. Every module belongs to one "
+        f"of {sorted(LAYER_RANK)}; add it to a layer rather than beside them."
+    )
 
 
 @pytest.mark.parametrize("name", sorted(LAYER_RANK))

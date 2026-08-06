@@ -1,6 +1,6 @@
-"""ADP-survival probability (DrafterSpec.md §4.8.1).
+"""ADP-survival probability.
 
-The only market input in the live loop (recommender side of the wall, §4.0).
+The only market input in the live loop (recommender side of the wall).
 Probability that a player lasts to my next pick.
 
 A symmetric normal mis-models ADP: real pick distributions are right-skewed and

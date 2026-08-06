@@ -1,22 +1,23 @@
 # Loose ranges here; requirements.lock pins the exact validated versions
 # (pip install -r requirements.lock to reproduce a known-good environment).
-# Core data + modeling (DrafterSpec.md §4.10)
+
+# Core data + modeling
 nflreadpy
 pandas
-pyarrow
+pyarrow          # pandas parquet engine — the draft-night bundle format
 numpy
 scipy
 scikit-learn
-sqlalchemy>=2.0
-psycopg2
-python-dotenv
 
 # Config + gradient-boosted quantile model
 pyyaml
 lightgbm
 
-# Resilient third-party HTTP (CFBD + FFC) via src/ingest/http.py
+# Resilient third-party HTTP (FFC ADP, local narration backend)
 httpx
+
+# Yahoo OAuth probes under scripts/spikes/ read credentials from .env
+python-dotenv
 
 # Identity spine, §11.4 `fuzzy` cascade tier. NOT optional: both spine.py and
 # match.py guard the import so the tiers above fuzzy keep working without it,
@@ -25,21 +26,15 @@ httpx
 # that way: the fuzzy tier was dead in this environment until it was tested.
 rapidfuzz
 
-# NOTE: CFBD college data is pulled via its REST API through ingest/http.py, NOT the
-# `cfbd` Python client — that client pins pydantic v1, which conflicts with
-# nflreadpy's pydantic v2 requirement. New .env key: CFBD_API_KEY (CFBD is not
-# anonymous), alongside DATABASE_URL.
-
-# xgboost was the retired weekly model; LightGBM quantile GBM replaces it.
-
 # Narration (§18). Optional at runtime — `narrate()` falls back to
 # `render_table`, which needs no network, no key and no model and states the
-# same attribution record. Listed because strategy.yaml ships
-# `narration.enabled: true`, so an absent package is a silent downgrade rather
-# than a chosen one.
+# same attribution record. The default backend is a LOCAL model over Ollama
+# (no package needed, plain HTTP via httpx); `anthropic` is only the hosted
+# fallback. Listed because strategy.yaml ships `narration.enabled: true`, so an
+# absent package is a silent downgrade rather than a chosen one.
 anthropic
 
-# HTTP API (api/) — draft sessions, players, recommendations. httpx (client
-# for the API's own tests) already listed above as a shared ingest dependency.
-fastapi
-uvicorn[standard]
+# REMOVED with the v1 deletion: sqlalchemy + psycopg2 (the research/serving
+# Postgres split), fastapi + uvicorn[standard] (the api/ package). The v2
+# engine reads a parquet bundle and writes a local SQLite ledger; it opens no
+# database connection and serves no HTTP.

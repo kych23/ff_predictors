@@ -1,4 +1,4 @@
-"""Roster + snake-draft layout tracking (DrafterSpec.md §4.8.1).
+"""Roster + snake-draft layout tracking.
 
 Tracks my roster, open starter slots, flex eligibility, and the snake pick layout
 (my next overall pick from n_teams + draft_position). Draft state is availability,
@@ -64,7 +64,7 @@ class RosterState:
         for p in self.my_picks:
             if p > ref:
                 return p
-        return None  # no next pick -> VONA survival term = 0 (§4.8.1)
+        return None  # no next pick -> VONA survival term = 0
 
     # --- roster mutations ---
     def reset(self):

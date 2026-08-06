@@ -1,4 +1,4 @@
-"""Expanding-by-season cross-validation (DrafterSpec.md §4.6 / §4.6.1).
+"""Expanding-by-season cross-validation.
 
 A model predicting season Y is trained only on seasons < Y. OOF predictions are
 emitted only after the ``min_train_seasons`` warmup (default 5) so degenerate early

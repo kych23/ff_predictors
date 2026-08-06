@@ -1,17 +1,17 @@
-"""Role & change features — the core edge over public tools (DrafterSpec.md §4.5.1).
+"""Role & change features — the core edge over public tools.
 
 Sees role *as it is now*, not lagged production: Week-1-effective depth-chart rank
-(per the as-of cutoff, §4.0), team-change flag, same-position competition, and the
+(per the as-of cutoff), team-change flag, same-position competition, and the
 central **vacated-opportunity** signal.
 
-Vacated opportunity (precise, §4.5.1): for player ``p`` on team ``T`` in season ``Y``,
+Vacated opportunity (precise): for player ``p`` on team ``T`` in season ``Y``,
 ``vacated_X`` = Σ over players ``q`` who were on ``T`` in ``Y-1`` but are NOT on ``T``
 in ``Y``, of ``q``'s ``Y-1`` ``X``, for ``X ∈ {targets, carries, air_yards}`` — both
 absolute and as a share of ``T``'s ``Y-1`` team total. A player inheriting a large
 vacated share is poised to break out regardless of his own prior role.
 
 Prefers coarse, draft-day-stable role signals (projected starter / committee) over
-fine ordering, to limit the late-July train/serve skew (§4.0).
+fine ordering, to limit the late-July train/serve skew.
 
 
 PORTED from src/features/role_change.py (DraftEngineDesign.md §9.2).

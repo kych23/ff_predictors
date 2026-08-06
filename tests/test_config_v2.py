@@ -109,7 +109,7 @@ def test_calibration_buckets_match_the_real_calibrator(league):
     import pandas as pd
 
     from src.core.constants import CALIBRATION_BUCKETS
-    from src.projection.calibrate import assign_bucket
+    from src.models.projection.calibrate import assign_bucket
 
     probes = [
         {"is_rookie": True},

@@ -1,6 +1,6 @@
 """Offensive scoring — the one place league rules become numbers (§10.2).
 
-Applies ``league.v2.yaml`` scoring to raw nflverse ``load_player_stats``
+Applies ``league.yaml`` scoring to raw nflverse ``load_player_stats``
 columns. **Never** uses the precomputed ``fantasy_points_ppr`` column:
 computing from raw box scores through our own config is what makes custom
 scoring real and what makes the §21.1 reconciliation gate meaningful.

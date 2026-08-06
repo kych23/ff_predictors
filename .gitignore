@@ -15,7 +15,9 @@ ipython_config.py
 env/
 venv/
 
-# TLS certs/keys (mkcert-generated local dev certs, e.g. localhost.pem)
+# Private keys and certs. The mkcert local-dev certs these were added for went
+# with the v1 web frontend; the rules stay as a standing guard against ever
+# committing key material.
 *.pem
 *.key
 *.crt
@@ -41,14 +43,7 @@ data/
 CLAUDE.md
 .pytest_cache/
 
-# live-draft save files (event log per draft)
-draft_state_*.json
-
 notes/
-# web frontend
-web/node_modules/
-web/.next/
-web/.env.local
 
 # Yahoo OAuth token cache (probe + live client)
 .yahoo_token.json

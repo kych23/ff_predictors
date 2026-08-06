@@ -45,7 +45,6 @@ Read that output as: Gibbs is worth about **$46 of expected winnings**, ±$2. Th
 - [Architecture](#architecture)
 - [Testing](#testing)
 - [Known limitations](#known-limitations)
-- [Legacy v1 surfaces](#legacy-v1-surfaces)
 - [Glossary](#glossary)
 
 ---
@@ -237,7 +236,7 @@ Re-running with shrinkage isolates the cause: KS p goes 0.0000 → 0.0134 → 0.
 
 ### v1 projection benchmark
 
-These numbers come from the **v1 pipeline** (`scripts/run_benchmark.py`, now `v1_frozen`) and describe the projection ranking layer, not the v2 simulation engine. They are carried over from the previous README rather than re-measured on the current bundle — kept because the projection architecture carried forward, labeled because the pipeline that produced them did not.
+These numbers were produced by the **v1 benchmark harness**, which has since been deleted along with the rest of v1. They describe the projection ranking layer, not the simulation engine, and they are carried over from the previous README rather than re-measured on the current bundle. Kept because the projection architecture carried forward; labeled because the harness that produced them is no longer in the tree and the result cannot currently be reproduced from source.
 
 Ground truth is actual-season FPPG (availability-neutral, so injuries don't confound the ranking), paired per season across test seasons 2017–2024.
 
@@ -261,16 +260,7 @@ That's everything the **draft cockpit** needs. `scripts/demo.sh`, `scripts/draft
 
 The database configuration below is only for **rebuilding** that bundle from source data.
 
-### Pipeline configuration
-
-`.env` in the project root:
-
-```
-DATABASE_URL=postgresql://user:password@host:5432/dbname       # serving (Supabase)
-RESEARCH_DATABASE_URL=postgresql://localhost:5432/ff_research  # research (local PG)
-```
-
-League settings — scoring, roster slots, payout structure — live in `config/league.yaml` and `config/strategy.yaml`. Changing either requires a full pipeline re-run; the config version hash is embedded in every model artifact so a stale bundle can't silently pair with a new config.
+League settings — scoring, roster slots, schedule, payout structure — live in `config/league.yaml`; simulation, ADP, opponent and narration settings live in `config/strategy.yaml`. Changing either requires rebuilding the bundle; the config version hash is embedded in every artifact so a stale bundle can't silently pair with a new config.
 
 ### Optional: local narration
 
@@ -283,28 +273,11 @@ ollama pull qwen2.5:7b
 
 Without it, the engine falls back to a plain table. Narration is never load-bearing.
 
-### Two databases
+### Rebuilding the bundle
 
-Storage is split so the hosted DB stays under Supabase's free-tier 500 MB cap:
-
-- **Research** (`RESEARCH_DATABASE_URL`, local Postgres) — full raw box scores, features, labels, backtest rows. ~640 MB. The pipeline, training, and benchmarks read and write this.
-- **Serving** (`DATABASE_URL`, Supabase) — only what live serving reads. ~43 MB.
-
-`scripts/publish_serving.py` copies the serving subset research → serving as the last pipeline step. If `RESEARCH_DATABASE_URL` is unset both roles resolve to the same DB, which is what the test suite uses.
-
-Start local Postgres with:
+Three commands, reading nflverse and FFC directly. There is no database anywhere in this project — an earlier version had a Postgres research/serving split, and it was deleted along with the rest of v1.
 
 ```bash
-/opt/homebrew/opt/postgresql@15/bin/pg_ctl -D /opt/homebrew/var/postgresql@15 start
-```
-
-### Building the bundle
-
-Draft night reads a single self-contained parquet bundle — no network, no database:
-
-```bash
-python scripts/seed_db.py --start 2012 --end 2026
-python scripts/build_features.py --start 2012 --end 2026
 python scripts/train_projection_v2.py     # quantile GBM -> projections artifact
 python scripts/fit_models.py              # weekly sigma, hazard, K/DST, correlation
 python scripts/build_bundle.py --season 2026
@@ -355,7 +328,7 @@ core      (L0)  config, errors, constants
 
 (v1 packages — `projection/`, `features/`, `recommender/`, `ingest/`, and friends — still sit alongside these. They're tracked in a `LEGACY_PACKAGES` set that the layer test asserts can only ever *shrink*, so the migration can't silently stall.)
 
-**The ADP wall is structural, not a convention.** The draft market must never reach the projection model, or the engine ends up measured against a signal it was trained on. Rather than a code-review rule, `models/**` may import exactly one platform module — `platform.asof`. That single clause buys three guarantees at once: no ADP import (ADP lives in `platform.sources`), no DB access (`platform.persistence`), and point-in-time discipline, since `asof` is the only door. Enforced by `test_layer_deps.py` and `test_leakage.py`.
+**The ADP wall is structural, not a convention.** The draft market must never reach the projection model, or the engine ends up measured against a signal it was trained on. Rather than a code-review rule, `models/**` may import exactly one platform module — `platform.asof`. That single clause buys three guarantees at once: no ADP import (ADP lives in `platform.sources`), no DB access (`platform.persistence`), and point-in-time discipline, since `asof` is the only door. Enforced by `test_layer_deps.py`.
 
 **Leakage.** Feature columns may only use data available before Week 1 of the target season. In-season stats in a preseason feature is a fatal research bug, and the guard is a test rather than discipline.
 
@@ -368,17 +341,15 @@ core      (L0)  config, errors, constants
 ## Testing
 
 ```bash
-venv/bin/pytest              # 859 tests, v2 engine
-venv/bin/pytest -m v1_frozen # 91 tests, frozen v1 surfaces
+venv/bin/pytest      # 506 tests
 ```
 
-Both suites pass. The interesting tests aren't the ones that check a function returns the right number — they're the ones that try to break an invariant:
+All pass, and nothing is deselected by default. The interesting tests aren't the ones that check a function returns the right number — they're the ones that try to break an invariant:
 
 - **`test_ledger.py`** tampers with the chain: edits a recommendation, deletes an entry, and asserts verification names the *first* broken link.
-- **`test_leakage.py`** walks the import graph and fails if the ADP wall is crossed.
+- **`test_layer_deps.py`** parses every import, enforces the layer DAG, holds the ADP wall to a single allowed module, and asserts `src/` contains only the six layers.
 - **`test_truncated_rebuild.py`** rebuilds a season's features with data truncated at Week 0 and asserts the result is identical — mutation testing found three independent guard layers, and only disabling all three makes it fail.
 - **`test_sim_kernel.py`** asserts extending a draw reuses its prefix and that normals come from inverse-CDF, which is what makes CRN valid.
-- **`test_layer_deps.py`** parses every import and enforces the layer DAG.
 - **`tests/oracles/ilp_lineup.py`** keeps the v1 ILP as a test oracle for the greedy lineup selector — greedy is optimal on a transversal matroid, and the oracle proves it on random rosters.
 
 `test_latency_budget.py` is marked slow and excluded from the default run; it's exercised explicitly by the chaos rehearsals.
@@ -403,16 +374,11 @@ Stated because they're real, not because they're exhaustive.
 
 ---
 
-## Legacy v1 surfaces
+## What was removed
 
-An earlier version shipped a weekly start/sit optimizer, a FastAPI service, and a Next.js draft room. They're pinned to the v1 config shape and excluded from the default test run (`addopts = "-m 'not v1_frozen'"`), and they still pass under `pytest -m v1_frozen`. Thawing them onto the v2 config is noted as a follow-up, not built.
+An earlier version of this project shipped a weekly start/sit optimizer, a FastAPI service, a Next.js draft room, and a Postgres research/serving split. All of it was **deleted**, not frozen — along with nine v1 source packages, 52 test files, and the v1 spec documents.
 
-```bash
-python scripts/draft.py --season 2026 --position 4      # v1 draft CLI
-python scripts/start.py --season 2026 --week 5 --roster my_team.yaml
-venv/bin/uvicorn api.main:app --reload --port 8000
-cd web && npm install && npm run dev
-```
+The reason is that the engine described above needs none of it. It reads a parquet bundle and writes a local SQLite ledger; carrying a web app and a database it never opens made the project look larger while making it harder to explain, and left a second, contradictory answer to "how do I run this?" in the tree. It is all recoverable from git history if a weekly surface ever comes back.
 
 ---
 

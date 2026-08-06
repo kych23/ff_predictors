@@ -3,10 +3,10 @@
 # `from src...` imports resolve without `python -m pytest`
 pythonpath = ["."]
 testpaths = ["tests"]
-# §9.4: the default run is v2-only. The frozen v1 surfaces (api/, web/, weekly
-# start/sit) still pass — run them with `pytest -m v1_frozen` or `-m ""`.
-addopts = "-m 'not v1_frozen'"
+# The v1 surfaces (api/, web/, weekly start/sit) and their `v1_frozen` marker
+# were deleted outright, so nothing is deselected by default any more. `slow`
+# is kept as an opt-OUT (`pytest -m 'not slow'`), which is what it was before —
+# it was never in `addopts`.
 markers = [
     "slow: hits the network or takes seconds; deselect with -m 'not slow'",
-    "v1_frozen: pinned to the v1 config shape, thawed in a later phase (DraftEngineDesign.md §9.4)",
 ]

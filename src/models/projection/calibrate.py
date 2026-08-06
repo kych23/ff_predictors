@@ -1,4 +1,4 @@
-"""Per-player-type interval calibration (DrafterSpec.md §4.6.1).
+"""Per-player-type interval calibration.
 
 Naive quantile intervals are overconfident exactly for rookies/role-changers
 (out-of-distribution, few similar training rows). This rescales interval widths per
@@ -35,7 +35,7 @@ GLOBAL = "_global"
 
 
 def assign_bucket(row: pd.Series) -> str:
-    """Mutually-exclusive player-type bucket by the §4.6.1 priority."""
+    """Mutually-exclusive player-type bucket by the priority."""
     if bool(row.get("is_rookie", False)):
         return "rookie"
     soh = row.get("seasons_of_history")
