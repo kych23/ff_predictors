@@ -1,0 +1,57 @@
+# Draft cockpit web surface.
+#
+# DELIBERATELY NOT IN strategy.yaml. `compute_hash` there hashes the entire raw
+# mapping (src/core/config/strategy.py:205-207), and that hash flows into
+# strategy_hash -> decision_version -> rng.seed_root. Adding a `web:` block to
+# strategy.yaml would re-seed every simulation stream and invalidate the
+# decision_version stamped into the current bundle — for settings that are pure
+# transport. Nothing in this file may affect a recommendation.
+#
+# The one exception is `engine:` below, which is decision-affecting and is
+# therefore stamped into the ledger and the API payload (see the comment there).
+
+host: 127.0.0.1
+port: 8000
+
+# manual | replay | yahoo. Overridable per session via POST /api/session.
+source: manual
+poll_interval_seconds: 3.0
+
+# Fire a recommendation automatically when it becomes my turn.
+auto_recommend: true
+
+# ReplaySource: a Session event-log JSON (the format Session.save writes).
+replay_path: tests/fixtures/replay_draft.json  # a 40-pick log built from the real board
+# Replay drives picks fast; letting auto_recommend fire on every one of them
+# would queue ~15 ten-second runs nobody asked for.
+replay_auto_recommend: false
+
+# Narration runs AFTER rec_ready, as a separate SSE frame, so it can never sit
+# on the pick clock. OllamaBackend defaults to a 30s timeout plus two 2s
+# availability probes — bundling that into the run would put worst-case latency
+# near 55s against a 25s budget.
+narration_timeout_seconds: 12
+
+# Cosmetic client-side countdown only. Nothing in Session or league.yaml knows
+# about a pick clock; this is a display timer seeded at each state frame.
+pick_clock_seconds: 90
+
+session_path: data/web/session.json
+ledger_path: data/web/ledger.sqlite
+
+engine:
+  # Decision-affecting, and machine-dependent, so it cannot live inside the
+  # hashed config. Instead both values are stamped into the ledger entry and
+  # into the API payload's `engine` block, so two runs that differ in leader
+  # can always be told apart after the fact.
+  reps: 512
+  budget_seconds: 25.0
+  # `shortlist` is NOT here. It is read from
+  # strategy.simulation.decision.shortlist_size so the value stays inside
+  # strategy_hash. (This also settles an existing inconsistency: draft_night.py
+  # passed 4 while strategy.yaml declares 6.)
+
+yahoo:
+  token_path: .yahoo_token.json
+  # league_key is read from strategy.yaml `yahoo.league_key`, which
+  # scripts/spikes/probe_yahoo.py populates. Not duplicated here.

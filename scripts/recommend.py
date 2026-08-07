@@ -56,10 +56,10 @@ def recommend(slot: int, taken: list[str], mine: list[str], bundle_path: Path,
     flags = board.stale_flags(league)
     if flags:
         print(f"  stale flags : {', '.join(flags)}")
-    print(f"  tier 2 (VONA + log-normal survival) — the simulator is not built yet")
+    print("  tier 2 (VONA + log-normal survival) — the simulator is not built yet")
     print(f"\n  board: {len(avail)} available of {len(board.players)}")
     print(f"  my seat {slot}, picks {rs.my_picks[:4]}...  on the clock at {current}, next turn {nxt}")
-    print(f"  replacement: " +
+    print("  replacement: " +
           "  ".join(f"{p}={levels.get(p):.1f}" for p in league.roster.modeled_positions))
     print()
     cols = ["player_name", "position", "team", "adp", "value", "marginal",

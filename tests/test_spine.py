@@ -13,7 +13,9 @@ import yaml
 
 from src.core.errors import ConfigError
 from src.platform.identity.spine import (
-    Spine, build_spine, load_overrides,
+    Spine,
+    build_spine,
+    load_overrides,
 )
 
 

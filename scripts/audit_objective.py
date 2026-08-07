@@ -36,9 +36,12 @@ from src.core.config.slots import build_slot_plan  # noqa: E402
 from src.domain.roster.lineup import greedy_lineup  # noqa: E402
 from src.domain.scoring.engine import score_offense  # noqa: E402
 from src.engine.audit.backtest import (  # noqa: E402
-    BacktestReport, pit_test, weekly_high_coverage,
+    BacktestReport,
+    pit_test,
+    weekly_high_coverage,
 )
-from src.engine.sim import kernel, rng as rng_mod  # noqa: E402
+from src.engine.sim import kernel  # noqa: E402
+from src.engine.sim import rng as rng_mod
 from src.engine.sim.draws import ProjectionBundle, draw_points  # noqa: E402
 from src.models.correlation.slot_matrix import DEFAULT_SLOTS  # noqa: E402
 from src.models.weekly.hazard import HazardModel, player_covariates  # noqa: E402

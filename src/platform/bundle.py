@@ -31,8 +31,17 @@ REQUIRED_COLUMNS: Final = (
 #: Declared coverage tiers (§11.4). A row is never silently valueless.
 COVERAGE_TIERS: Final = ("full", "no_prior_season", "unresolved")
 
-#: Recognized `value_source` values, worst to best.
-VALUE_SOURCES: Final = ("prior_season_ppg", "quantile_model")
+#: Recognized `value_source` values, worst to best. The two placeholder tiers
+#: exist so a filled-in value can never be mistaken for a fitted projection:
+#: `replacement_floor` is a positional 10th percentile standing in for a player
+#: the identity join could not value, and `kdst_empirical` is the fitted K/DST
+#: distribution's mean (K and DST are outside `modeled_positions`, so the
+#: quantile model never covers them). Both are deliberately *rankable* — a zero
+#: is not a low value, it is an unpickable one.
+VALUE_SOURCES: Final = (
+    "none", "replacement_floor", "kdst_empirical",
+    "prior_season_ppg", "quantile_model",
+)
 
 
 @dataclass(frozen=True)

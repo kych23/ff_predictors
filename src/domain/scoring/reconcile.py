@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from typing import Final
 
-import numpy as np
 import pandas as pd
 
 #: Components rebuilt from PBP, keyed to the same names `score_offense` uses.

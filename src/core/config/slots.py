@@ -24,9 +24,9 @@ so the two ways to get it wrong are recorded here:
 """
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations
-from typing import Iterable, Mapping, Sequence
 
 from src.core.constants import SLOT_BENCH
 

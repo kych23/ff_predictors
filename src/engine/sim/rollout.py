@@ -27,9 +27,6 @@ import numpy as np
 import pandas as pd
 
 from src.core.constants import RngKind
-from src.engine.decision import replacement as replacement_mod
-from src.engine.decision import roster_state as rs_mod
-from src.engine.decision import vona
 from src.engine.sim import rng as rng_mod
 
 
@@ -103,12 +100,20 @@ def softmax_adp_pick(board: pd.DataFrame, candidates: np.ndarray, pick_no: int,
 def rollout(board: pd.DataFrame, cfg, strategy, *, my_seat: int,
             already_taken: dict[int, int] | None = None,
             forced: tuple[int, int] | None = None,
+            pick_offset: int = 0,
             root: str, rep: int) -> RolloutResult:
     """Play the draft to completion.
 
     ``already_taken`` maps board row -> seat for picks that have happened.
     ``forced`` is (seat, row): the candidate under evaluation, taken at my
     next turn.
+
+    ``pick_offset`` counts picks that HAVE happened but have no board row —
+    names the identity spine could not resolve. They cannot appear in
+    ``already_taken``, so without this the draft resumes at the wrong snake
+    position and every subsequent seat is wrong. The affected seat's roster is
+    still one player short, which is a bounded and deliberate approximation
+    (notes/draft-cockpit-web.md).
     """
     tau = float(strategy.opponents.defaults["params"]["tau"])
     caps = dict(strategy.max_per_position)
@@ -123,7 +128,9 @@ def rollout(board: pd.DataFrame, cfg, strategy, *, my_seat: int,
         counts[seat][pos] = counts[seat].get(pos, 0) + 1
 
     forced_row = forced[1] if forced else None
-    pick_no = len(taken) + 1
+    # `pick_offset` carries unresolved picks: real picks with no board row,
+    # so `taken` cannot represent them and the snake seat would drift.
+    pick_no = len(taken) + pick_offset + 1
     total_picks = cfg.teams * cfg.roster.rounds
 
     while pick_no <= total_picks:

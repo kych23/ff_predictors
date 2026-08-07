@@ -11,7 +11,11 @@ import json
 import pytest
 
 from src.app.cockpit.session import (
-    MY_PICK, PICK, DraftState, Event, Session, available, my_pick_numbers,
+    PICK,
+    Event,
+    Session,
+    available,
+    my_pick_numbers,
     snake_seat,
 )
 from src.core.errors import DataError

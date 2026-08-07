@@ -28,7 +28,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.core.config import load_league  # noqa: E402
 from src.domain.scoring.engine import score_offense  # noqa: E402
 from src.domain.scoring.reconcile import (  # noqa: E402
-    PBP_COMPONENTS, aggregate_pbp, compare,
+    PBP_COMPONENTS,
+    aggregate_pbp,
+    compare,
 )
 from src.platform.sources import nflverse  # noqa: E402
 
@@ -55,7 +57,7 @@ def main() -> int:
 
     cfg = load_league()
     print(f"§21.1 RECONCILIATION GATE — season {args.season}")
-    print(f"  form: DEGRADED (nflverse self-consistency; Yahoo blocked)")
+    print("  form: DEGRADED (nflverse self-consistency; Yahoo blocked)")
     print(f"  league_hash {cfg.league_hash}  model {cfg.model_version}\n")
 
     print("[1/4] weekly-aggregate path...")

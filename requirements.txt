@@ -34,7 +34,24 @@ rapidfuzz
 # absent package is a silent downgrade rather than a chosen one.
 anthropic
 
-# REMOVED with the v1 deletion: sqlalchemy + psycopg2 (the research/serving
-# Postgres split), fastapi + uvicorn[standard] (the api/ package). The v2
-# engine reads a parquet bundle and writes a local SQLite ledger; it opens no
-# database connection and serves no HTTP.
+# Web cockpit (src/app/web). The draft surface is now a local FastAPI app with
+# an SSE push channel and a React frontend in web/. This is a deliberate
+# reversal of the v1 deletion note that used to sit here: that note claimed the
+# engine "serves no HTTP", which stopped being true when the cockpit moved to a
+# browser. See notes/draft-cockpit-web.md.
+fastapi
+uvicorn[standard]
+sse-starlette
+
+# The API tests drive the app through httpx.ASGITransport, which is async;
+# without a runner they would be collected and silently skipped.
+pytest-asyncio
+
+# Yahoo OAuth (scripts/spikes, src/app/web/sources/yahoo.py). Imported LAZILY
+# there, so a broken install degrades the Yahoo adapter alone rather than the
+# whole cockpit.
+authlib
+
+# STILL REMOVED with the v1 deletion: sqlalchemy + psycopg2 (the research and
+# serving Postgres split). The engine reads a parquet bundle and writes a local
+# SQLite ledger; it opens no database connection.

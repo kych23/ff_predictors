@@ -7,7 +7,11 @@ from scipy.optimize import check_grad
 
 from src.models.opponents.diagnostics import run_gate
 from src.models.opponents.fit import (
-    Choice, _objective_and_grad, _pack, fit_managers, league_mean_loglik,
+    Choice,
+    _objective_and_grad,
+    _pack,
+    fit_managers,
+    league_mean_loglik,
 )
 from src.platform.sources.league_history import load_history
 

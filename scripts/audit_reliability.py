@@ -25,9 +25,9 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.core.config import load_league  # noqa: E402
 from src.engine.audit.reliability import (  # noqa: E402
-    reliability, resample_players_within_season,
+    reliability,
+    resample_players_within_season,
 )
 from src.models.projection.quantile_model import QuantileGBM  # noqa: E402
 from src.platform import bundle as bundle_mod  # noqa: E402
@@ -73,7 +73,6 @@ def main() -> int:
                     default=Path("data/bundles/draft_night_bundle.parquet"))
     args = ap.parse_args()
 
-    cfg = load_league()
     b = bundle_mod.read(args.bundle)
     states = load_states(b.snapshot_id)
     matrix, features = load_training_matrix()
@@ -103,7 +102,7 @@ def main() -> int:
         model.fit(sample[features], sample["fppg"])
         preds = model.predict(target_rows[features])
         p50 = np.asarray(preds["p50"], dtype=float)
-        fitted[i] = dict(zip(target_rows["player_id"].astype(str), p50))
+        fitted[i] = dict(zip(target_rows["player_id"].astype(str), p50, strict=False))
         print(f"  refit {i}: fitted on {len(sample):,} resampled rows")
 
     board_ids = set(b.board()["player_id"].astype(str))
@@ -136,7 +135,7 @@ def main() -> int:
                             & (report.by_round["k"] == 12)]["spearman"].mean()
     late = report.by_round[(report.by_round["round"] >= 12)
                            & (report.by_round["k"] == 12)]["spearman"].mean()
-    print(f"\n  READ THIS BEFORE QUOTING THE HEADLINE NUMBER.")
+    print("\n  READ THIS BEFORE QUOTING THE HEADLINE NUMBER.")
     print(f"  spearman@84 is high ({report.overall.set_index('k').loc[84, 'spearman']:.3f}) "
           f"because the draftable pool's coarse")
     print(f"  ordering is stable. spearman@12 is NOT: {early:.3f} in rounds 1-4")

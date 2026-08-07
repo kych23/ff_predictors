@@ -27,12 +27,17 @@ from src.core.config.slots import build_slot_plan  # noqa: E402
 from src.domain.payout.compile import compile_payout  # noqa: E402
 from src.engine.audit.elasticity import KNOBS, elasticity_table  # noqa: E402
 from src.engine.audit.sobol import sobol_indices  # noqa: E402
-from src.engine.sim import kernel, rng as rng_mod  # noqa: E402
+from src.engine.sim import kernel  # noqa: E402
+from src.engine.sim import rng as rng_mod
 from src.engine.sim.draws import draw_points  # noqa: E402
 from src.platform import bundle as bundle_mod  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from simulate import build_projection_bundle, draft_rosters, load_correlation_matrix  # noqa: E402
+from simulate import (  # noqa: E402
+    build_projection_bundle,
+    draft_rosters,
+    load_correlation_matrix,
+)
 
 MY_SEAT = 3
 
@@ -116,7 +121,7 @@ def main() -> int:
 
         def evaluate_vector(x) -> float:
             bundle, chol = proj, corr.cholesky
-            for knob, factor in zip(KNOBS, x):
+            for knob, factor in zip(KNOBS, x, strict=False):
                 bundle, chol = knob.apply(bundle, chol, float(factor))
             return simulate(bundle, chol)
 
@@ -134,12 +139,12 @@ def main() -> int:
             print("  with suspicion — its one-at-a-time slope is not the whole")
             print("  effect.")
         else:
-            print(f"\n  Not interpreting the table above.")
-            print(f"  Sobol takes no differences against a common base, so it")
-            print(f"  cannot use CRN the way the elasticity table does — the")
-            print(f"  simulator's own MC error enters the variance directly and")
+            print("\n  Not interpreting the table above.")
+            print("  Sobol takes no differences against a common base, so it")
+            print("  cannot use CRN the way the elasticity table does — the")
+            print("  simulator's own MC error enters the variance directly and")
             print(f"  is charged to 'interaction'. At --reps {args.reps} that")
-            print(f"  noise is comparable to the knob effects themselves.")
+            print("  noise is comparable to the knob effects themselves.")
             print(f"  Raise BOTH: --reps 4096 --sobol {max(args.sobol * 4, 1024)}.")
 
     print("\n  Note: the design's original lambda_{QB,RB,WR,TE} knobs do not")

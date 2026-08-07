@@ -10,7 +10,9 @@ import pytest
 
 from src.core.config import load_league
 from src.models.projection.calibrate import (
-    IntervalCalibrator, assign_bucket, calibrate_oof_lofo, coverage_by_bucket,
+    assign_bucket,
+    calibrate_oof_lofo,
+    coverage_by_bucket,
 )
 from src.models.projection.folds import make_expanding_folds
 from src.models.projection.quantile_model import QuantileGBM

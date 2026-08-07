@@ -21,10 +21,11 @@ model. §19's offline requirement is a property of the imports, not a promise.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from src.core.errors import DataError
 
@@ -51,7 +52,7 @@ class Event:
             | {"kind": self.kind}
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "Event":
+    def from_dict(cls, raw: dict[str, Any]) -> Event:
         return cls(
             kind=str(raw["kind"]), player_id=str(raw.get("player_id", "")),
             seat=raw.get("seat"), value=raw.get("value"),
@@ -73,8 +74,20 @@ class DraftState:
 
     @property
     def pick_number(self) -> int:
-        """1-indexed pick currently on the clock."""
-        return len(self.drafted) + 1
+        """1-indexed pick currently on the clock.
+
+        Unresolved picks count. A name nobody could resolve is still a pick
+        that happened: the room moved on, and the next seat is up. Counting
+        only `drafted` left the clock — and therefore `on_the_clock`,
+        `is_my_turn`, `next_my_pick` and `describe_clock` — short by one for
+        the REST OF THE DRAFT after a single unresolvable name. A human typist
+        hits that rarely; a live feed hits it often.
+
+        The unresolved player is deliberately NOT given a placeholder id in
+        `drafted`: `Board.take` rejects ids that are not on the board, and a
+        sentinel would leak into `available()`, `by_seat` and the ledger.
+        """
+        return len(self.drafted) + len(self.unresolved) + 1
 
 
 def snake_seat(pick_number: int, teams: int) -> int:
@@ -238,7 +251,7 @@ class Session:
         tmp.replace(self.path)      # atomic; a crash mid-write cannot truncate
 
     @classmethod
-    def load(cls, path: Path) -> "Session":
+    def load(cls, path: Path) -> Session:
         path = Path(path)
         if not path.exists():
             raise DataError(f"no session at {path}")
@@ -250,14 +263,14 @@ class Session:
         session.state = session._replay()
         return session
 
-    def resume_or_new(self) -> "Session":
+    def resume_or_new(self) -> Session:
         if self.path is not None and self.path.exists():
             return Session.load(self.path)
         return self
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def available(board_ids: Iterable[str], state: DraftState) -> list[str]:

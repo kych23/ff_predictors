@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from src.engine.sim.waiver import apply_waiver
 from src.models.correlation.slot_matrix import (
-    DEFAULT_SLOTS, bootstrap_posterior,
+    DEFAULT_SLOTS,
+    bootstrap_posterior,
 )
 
 

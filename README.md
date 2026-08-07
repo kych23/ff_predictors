@@ -4,7 +4,7 @@ A fantasy football draft engine that prices every pick in **dollars of expected 
 
 Most draft tools rank players by projected points. Points aren't what you win. A league that pays the top three finishers rewards a roster that reaches the money, and the roster that maximizes expected points is not usually the roster that maximizes expected payout — the two diverge exactly where variance matters. This engine optimizes the thing you actually get paid on.
 
-It runs fully offline on a laptop, answers inside a 25-second pick clock, and degrades on a timer instead of stalling.
+It runs locally on a laptop, answers inside a 25-second pick clock, and degrades on a timer instead of stalling. There is a terminal cockpit and a browser one; the browser cockpit can follow a live league draft.
 
 ```
 [round 1, pick 4 of 180, YOU on the clock — you are up]
@@ -71,6 +71,8 @@ That benchmark started at **0/12**. Four defects, all in the harness rather than
 
 ## Demo
 
+![the draft cockpit running a pick end to end](docs/demo.gif)
+
 ### One command
 
 ```bash
@@ -90,12 +92,17 @@ The `undo` at the end is the part worth watching: the engine re-runs and returns
 >   undone. round 1, pick 4 of 180, YOU on the clock — you are up
 ```
 
-To record a terminal GIF from it:
+The GIF above is that command's own output. To regenerate it:
 
 ```bash
-asciinema rec demo.cast -c "bash scripts/demo.sh"
-agg demo.cast docs/demo.gif
+bash scripts/demo.sh > /tmp/demo.txt 2>&1
+venv/bin/python scripts/make_demo_gif.py /tmp/demo.txt docs/demo.gif
 ```
+
+`make_demo_gif.py` replays captured stdout at a readable pace — a real-time
+recording would be nearly a minute of static screen, since each pick spends
+~10s in the simulator and ~3s in the narration model. It renders bytes the
+engine actually printed; it never composes text of its own.
 
 ### A full 180-pick rehearsal
 
@@ -234,18 +241,15 @@ Re-running with shrinkage isolates the cause: KS p goes 0.0000 → 0.0134 → 0.
 
 **Latency**, measured on the reference machine (Apple M4 Pro, 24 GB), across three full rehearsals: median 5.9–7.1s per pick against a 25s budget, tier 0 every time, zero demotions.
 
-### v1 projection benchmark
+### The gap: no end-to-end result yet
 
-These numbers were produced by the **v1 benchmark harness**, which has since been deleted along with the rest of v1. They describe the projection ranking layer, not the simulation engine, and they are carried over from the previous README rather than re-measured on the current bundle. Kept because the projection architecture carried forward; labeled because the harness that produced them is no longer in the tree and the result cannot currently be reproduced from source.
+The engine has **not been measured against the draft market**, and this README will not imply otherwise.
 
-Ground truth is actual-season FPPG (availability-neutral, so injuries don't confound the ranking), paired per season across test seasons 2017–2024.
+An earlier version of this project did carry that measurement — its projection layer beat ADP on NDCG in 8 of 8 test seasons, and its recommender beat ADP-following bots by ~4.7 starting-lineup points per game. Those numbers came from a benchmark harness that was deleted with the rest of v1, so they cannot be reproduced from this tree and they describe a different recommender. They are in git history, not in this table.
 
-| Metric | mean(engine − ADP) | Wilcoxon p | bootstrap 95% CI | Result |
-| --- | --- | --- | --- | --- |
-| NDCG@84 (full board) | **+0.062** | 0.0078 | [+0.048, +0.075] | PASS |
-| NDCG@36 (early rounds) | **+0.083** | 0.0078 | [+0.064, +0.102] | PASS |
+For the current engine, `expected_dollars_vs_adp_bots` is declared in `config/power_assumptions.yaml` with `effect_provenance: assumed` and **has no implementation**. The $4 figure in the power audit is the effect size used to *size* the test, not a result of running it.
 
-Engine beat ADP in 8 of 8 seasons. The honest ceiling: ~8–9 evaluable seasons is the hard limit of available NFL history, which is precisely why the v2 power audit rates most gates descriptive-only.
+What that means honestly: the machinery above — payout-aware objective, decomposed uncertainty, CRN, the degradation ladder — is better-founded than what it replaced, and it is unproven. `scripts/mock_draft.py` already plays 180 picks against eleven ADP bots with the real engine on one seat, so the missing piece is scoring all twelve final rosters over many seeds and reporting a paired interval. That is the next thing worth building, and until it exists the correct summary of this project's edge over the market is "not yet demonstrated."
 
 ---
 
@@ -256,7 +260,16 @@ python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-That's everything the **draft cockpit** needs. `scripts/demo.sh`, `scripts/draft_night.py`, and `scripts/mock_draft.py` read a single self-contained parquet bundle and never open a socket — no database, no API key, no `.env`. That's a hard requirement, not a convenience: draft night happens on hotel wifi, and a tool that needs the network is a tool that fails when it matters.
+That's everything the **draft cockpit** needs. `scripts/demo.sh`,
+`scripts/draft_night.py`, and `scripts/mock_draft.py` read a single
+self-contained parquet bundle — no database, no API key, no `.env`.
+
+**One correction to an earlier version of this README**, which claimed the
+recommendation path "never opens a socket": it does, and always did.
+`bundle_build.nflverse_covariates` fetches hazard covariates on every tier-0
+run. The engine core is network-free; the covariate load is not. The web
+cockpit adds a deliberate network transport on top, and falls back to manual
+entry when the feed dies.
 
 The database configuration below is only for **rebuilding** that bundle from source data.
 
@@ -360,9 +373,9 @@ All pass, and nothing is deselected by default. The interesting tests aren't the
 
 Stated because they're real, not because they're exhaustive.
 
-**K and DST are never drafted.** Kickers and defenses aren't in `modeled_positions`, so they enter the board with `value = 0.0` and score 0 in the VONA shortlist, which means the simulator never evaluates one. The simulator itself prices them correctly (K at 8.04 pts/wk from a fitted empirical distribution) — the gap is in `scripts/build_bundle.py`, which should patch from the `kdst_*.json` artifact the way `scripts/simulate.py` already does. Streaming both off waivers is a defensible strategy, so the *output* is reasonable; the reasoning behind it is not.
+**The waiver floor is off during a live pick.** It is wired and runs in offline analysis, but `apply_waiver` costs ~450ms per evaluation against ~0ms for the matmul it corrects: the claim loop is sequential over a shared pool and runs ~40,000 Python iterations that don't vectorize. At ~50 evaluations per pick that is 22s of a 25s budget — measured, it took a pick from 10s to 26s and starved the allocator from 50 draws to 10. `strategy.simulation.waiver.in_decision_path` defaults to `false` until the loop is vectorized across replications.
 
-**The waiver floor is not wired in.** `src/engine/sim/waiver.py` is built and tested but the kernel never calls it, so mid-season replacement isn't currently modeled.
+**Every kicker is worth the same.** K and DST sit outside `modeled_positions`, so there is no per-player model for them; they all receive their position's fitted empirical mean (K 8.04, DST 6.25 pts/wk). That is enough to make them draftable in the endgame — which is the design's intent — but the engine cannot prefer one kicker over another, and the tier-3 table shows a single tier for each.
 
 **The opponent model is league-mean.** Per-manager tendencies failed their pre-registered gate (p = 0.135) and were not built.
 

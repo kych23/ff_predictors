@@ -21,7 +21,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.errors import ConfigError  # noqa: E402
 from src.engine.audit.power import (  # noqa: E402
-    MDE_POWER, evaluate, load_assumptions, required_n,
+    MDE_POWER,
+    evaluate,
+    load_assumptions,
+    required_n,
 )
 
 

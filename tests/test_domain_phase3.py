@@ -1,7 +1,6 @@
 """Domain-layer tests: scoring, lineup, bracket, payout (§21.3, §21.7)."""
 from __future__ import annotations
 
-import itertools
 import random
 
 import numpy as np
@@ -181,13 +180,15 @@ def test_both_oracles_agree(plan):
     counter, matching = CounterOracle(plan), MatchingOracle(plan)
     rng = random.Random(7)
     for _ in range(400):
-        counter.reset(); matching.reset()
+        counter.reset()
+        matching.reset()
         for _ in range(12):
             pos = rng.choice(list(plan.positions))
             c_ok, m_ok = counter.can_add(pos), matching.can_add(pos)
             assert c_ok == m_ok, f"disagree on {pos}"
             if c_ok:
-                counter.add(pos); matching.add(pos)
+                counter.add(pos)
+                matching.add(pos)
 
 
 # ---------------------------------------------------------------- schedule

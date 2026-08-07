@@ -12,7 +12,10 @@ import sqlite3
 import pytest
 
 from src.app.cockpit.ledger import (
-    GENESIS_HASH, DecisionLedger, canonical_json, compute_hash,
+    GENESIS_HASH,
+    DecisionLedger,
+    canonical_json,
+    compute_hash,
 )
 
 
@@ -204,3 +207,18 @@ def test_recommendation_round_trips_through_json(ledger):
     rec = _rec()
     ledger.append("s", 1, 0, rec, snapshot_id="sn")
     assert list(ledger)[0].recommendation == json.loads(canonical_json(rec))
+
+
+def test_superseded_does_not_depend_on_python_object_identity(ledger):
+    """`superseded` compared `id(e)` across two independently-built entry sets.
+    They never share object identity, so the result came down to CPython
+    reusing a freed address — it passed alone and failed inside a full suite
+    run, which is the worst way for a bug to behave.
+    """
+    _fill(ledger, n=3)
+    ledger.append("sess", pick_no=2, tier=1, recommendation=_rec("redo"),
+                  actual_pick="redo", snapshot_id="sn2_abc")
+    superseded = ledger.superseded()
+    assert [e.id for e in superseded] == [2], (
+        "exactly the corrected entry, identified by its row id")
+    assert len(ledger.latest_by_pick()) == 3

@@ -51,7 +51,7 @@ class EmpiricalDistribution:
                 "n_observations": self.n_observations}
 
     @classmethod
-    def from_dict(cls, raw: dict) -> "EmpiricalDistribution":
+    def from_dict(cls, raw: dict) -> EmpiricalDistribution:
         return cls(position=str(raw["position"]),
                    quantiles=np.asarray(raw["quantiles"], dtype="float64"),
                    mean=float(raw["mean"]), sd=float(raw["sd"]),
@@ -80,7 +80,7 @@ class KDSTModel:
         }
 
     @classmethod
-    def from_dict(cls, raw: dict) -> "KDSTModel":
+    def from_dict(cls, raw: dict) -> KDSTModel:
         return cls(
             distributions={k: EmpiricalDistribution.from_dict(v)
                            for k, v in raw["distributions"].items()},

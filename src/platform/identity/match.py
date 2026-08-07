@@ -82,9 +82,6 @@ def match_by_name(
 
     rf_unique = rf.drop_duplicates("_key", keep="first")
     merged = lf.merge(rf_unique, on="_key", how="left", suffixes=("", "_r"))
-    hit = merged[merged[right_name + "_r"].notna()] if right_name + "_r" in merged \
-        else merged[merged["_key"].isin(set(rf_unique["_key"]))]
-
     matched = merged[merged["_key"].isin(set(rf_unique["_key"]))].copy()
     missed = merged[~merged["_key"].isin(set(rf_unique["_key"]))].copy()
 

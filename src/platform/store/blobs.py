@@ -10,8 +10,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Final, Mapping
+from typing import Final
 
 _REPO_ROOT: Final = Path(__file__).resolve().parents[3]
 

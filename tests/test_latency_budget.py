@@ -24,7 +24,11 @@ from src.app.cockpit.ladder import recommend
 from src.core.config import load_league, load_strategy
 from src.core.config.slots import build_slot_plan
 from src.engine.decision.ladder_tiers import (
-    DrawCache, StageTimings, make_tier0, make_tier1, make_tier3,
+    DrawCache,
+    StageTimings,
+    make_tier0,
+    make_tier1,
+    make_tier3,
 )
 from src.engine.decision.tiers import build_tier_table
 from src.engine.sim import kernel

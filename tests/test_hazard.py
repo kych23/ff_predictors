@@ -12,7 +12,11 @@ import pandas as pd
 import pytest
 
 from src.models.weekly.hazard import (
-    AGE_BUCKETS, HazardModel, build_hazard_panel, fit_hazard, player_covariates,
+    AGE_BUCKETS,
+    HazardModel,
+    build_hazard_panel,
+    fit_hazard,
+    player_covariates,
 )
 
 POSITIONS = ("QB", "RB", "WR", "TE")
@@ -192,6 +196,18 @@ def test_covariates_are_all_as_of_before_week_one():
     """Age is a birth date and games missed comes from season-1. Nothing here
     can see the target season — this is what makes the hazard draft-safe."""
     import inspect
+
+    params = inspect.signature(player_covariates).parameters
+    # The only stats frame it can reach is the caller-supplied PRIOR season.
+    # There is no parameter through which target-season production could enter,
+    # which is the structural version of the guarantee — stronger than reading
+    # the body for a string.
+    assert "prior_stats" in params
+    assert not any("current" in p or "target_stats" in p for p in params)
+
+    # And it must not fetch anything itself: a covariate builder that reached
+    # out to nflverse could pull the target season regardless of its signature.
     src = inspect.getsource(player_covariates)
-    assert "season - 1" not in src or True          # documented in the body
-    assert "prior_stats" in inspect.signature(player_covariates).parameters
+    assert "fetch(" not in src, (
+        "player_covariates must be handed its data, not fetch it — otherwise "
+        "the as-of guarantee depends on what it decides to request")

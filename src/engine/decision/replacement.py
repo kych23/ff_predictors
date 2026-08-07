@@ -23,7 +23,6 @@ position rename (§10.7).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict
 
 import pandas as pd
 
@@ -32,7 +31,7 @@ from src.core.config.league import LeagueConfig, load_league
 
 @dataclass
 class ReplacementLevels:
-    levels: Dict[str, float]                 # position -> replacement value
+    levels: dict[str, float]                 # position -> replacement value
     starters: set = field(default_factory=set)  # player_ids that earned a starting slot
 
     def get(self, position: str) -> float:
@@ -62,7 +61,7 @@ def compute_replacement(
     pure_used = {p: 0 for p in cfg.roster.modeled_positions}
     flex_used = 0
     starters: set = set()
-    first_non_starter: Dict[str, float] = {}
+    first_non_starter: dict[str, float] = {}
 
     # Flex-eligible skill players: greedy fill pure then flex.
     skill = df[df["position"].isin(flex_elig)]

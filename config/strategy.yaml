@@ -152,6 +152,22 @@ simulation:
     my_future_picks: vona_heuristic
   waiver:
     enabled: true
+    # Whether the correction also runs inside the LIVE pick clock.
+    #
+    # Measured on the reference machine: `apply_waiver` costs ~450 ms per
+    # evaluation at reps=256, against ~0 ms for the `evaluate_rosters` matmul it
+    # corrects. The claim loop is inherently sequential — a shared pool resolved
+    # in reverse standings order — so it runs ~40,000 Python iterations
+    # (reps x weeks x teams) that do not vectorize. Called once per
+    # (candidate, draw), that is ~22 s of a 25 s budget: turning it on took a
+    # live pick from 10 s to 26 s, past the 18 s tier-1 demotion threshold, and
+    # starved the allocator from 50 draws down to 10 (which also cost run-to-run
+    # reproducibility, since the allocator is wall-clock bounded).
+    #
+    # So it is ON for offline analysis (`simulate.py`, the audits), where the
+    # fidelity is worth the seconds, and OFF on the clock until the loop is
+    # vectorized across replications. Flip this to true to accept the demotion.
+    in_decision_path: false
     detection_lag_weeks: 2
     pool_size: 40
     shrinkage_k_games: 6

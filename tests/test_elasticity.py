@@ -13,7 +13,10 @@ import numpy as np
 import pytest
 
 from src.engine.audit.elasticity import (
-    IRRELEVANT_BELOW, KNOBS, Knob, elasticity_table,
+    IRRELEVANT_BELOW,
+    KNOBS,
+    Knob,
+    elasticity_table,
 )
 from src.engine.sim.draws import ProjectionBundle
 

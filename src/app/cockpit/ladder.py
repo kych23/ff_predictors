@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Callable
+from collections.abc import Callable
 
 # Re-exported: the record is produced by the engine and merely presented here
 # (§9.0 — app may import engine, never the reverse).

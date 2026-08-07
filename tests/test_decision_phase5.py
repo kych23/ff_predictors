@@ -10,7 +10,12 @@ import pytest
 
 from src.core.config import load_league
 from src.engine.decision import (
-    quantile_schedule, replacement, roster_state, snake, survival, vona,
+    quantile_schedule,
+    replacement,
+    roster_state,
+    snake,
+    survival,
+    vona,
 )
 
 

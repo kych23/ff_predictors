@@ -17,7 +17,8 @@ and kicker value reduces to attempt volume and distance mix.
 """
 from __future__ import annotations
 
-from typing import Final, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 import pandas as pd
 

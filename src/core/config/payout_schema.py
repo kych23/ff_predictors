@@ -55,7 +55,7 @@ class Amount:
         return self.dollars if self.dollars is not None else self.pct_of_pot * pot
 
     @classmethod
-    def from_raw(cls, raw: object, *, where: str) -> "Amount":
+    def from_raw(cls, raw: object, *, where: str) -> Amount:
         if not isinstance(raw, dict):
             raise ConfigError(f"{where}: amount must be a mapping, got {type(raw).__name__}")
         unknown = set(raw) - {"dollars", "pct_of_pot"}

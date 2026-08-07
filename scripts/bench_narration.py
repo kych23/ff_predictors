@@ -31,10 +31,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.app.narration.attribution import AttributionRecord  # noqa: E402
 from src.app.narration.backends import (  # noqa: E402
-    AnthropicBackend, OllamaBackend,
+    AnthropicBackend,
+    OllamaBackend,
 )
 from src.app.narration.render import (  # noqa: E402
-    NarrationConfig, narrate, render_table,
+    NarrationConfig,
+    narrate,
+    render_table,
 )
 
 PRIZES = ("champion", "weekly_high", "season_points")

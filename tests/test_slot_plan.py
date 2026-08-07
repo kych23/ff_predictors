@@ -102,7 +102,7 @@ def test_exhaustive_against_matching(live_plan):
     positions = live_plan.positions
     mismatches = []
     for combo in itertools.product(range(5), repeat=len(positions)):
-        counts = dict(zip(positions, combo))
+        counts = dict(zip(positions, combo, strict=False))
         if is_feasible(live_plan, counts) != _matches(live_plan.copies, counts):
             mismatches.append(counts)
     assert not mismatches, f"oracle disagrees with matching on: {mismatches[:5]}"
@@ -135,7 +135,7 @@ def test_non_laminar_oracle_still_exact():
         {"RBWR": ["RB", "WR"], "WRTE": ["WR", "TE"]},
     )
     for combo in itertools.product(range(4), repeat=len(plan.positions)):
-        counts = dict(zip(plan.positions, combo))
+        counts = dict(zip(plan.positions, combo, strict=False))
         assert is_feasible(plan, counts) == _matches(plan.copies, counts), counts
 
 

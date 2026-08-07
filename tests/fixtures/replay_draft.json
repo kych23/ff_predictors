@@ -1,0 +1,288 @@
+{
+  "my_seat": 3,
+  "teams": 12,
+  "rounds": 15,
+  "snapshot_id": "sn2_e5789414addfdc63df0621fe",
+  "events": [
+    {
+      "kind": "PICK",
+      "player_id": "00-0039139",
+      "raw_input": "Jahmyr Gibbs",
+      "seat": 0,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0038542",
+      "raw_input": "Bijan Robinson",
+      "seat": 1,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0039075",
+      "raw_input": "Puka Nacua",
+      "seat": 2,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0036900",
+      "raw_input": "Ja'Marr Chase",
+      "seat": 3,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0033280",
+      "raw_input": "Christian McCaffrey",
+      "seat": 4,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0038543",
+      "raw_input": "Jaxon Smith-Njigba",
+      "seat": 5,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0036963",
+      "raw_input": "Amon-Ra St. Brown",
+      "seat": 6,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0036223",
+      "raw_input": "Jonathan Taylor",
+      "seat": 7,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0039040",
+      "raw_input": "De'Von Achane",
+      "seat": 8,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0037238",
+      "raw_input": "Drake London",
+      "seat": 9,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0036358",
+      "raw_input": "CeeDee Lamb",
+      "seat": 10,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0039067",
+      "raw_input": "Rashee Rice",
+      "seat": 11,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0038597",
+      "raw_input": "Chase Brown",
+      "seat": 11,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0036322",
+      "raw_input": "Justin Jefferson",
+      "seat": 10,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0040122",
+      "raw_input": "Ashton Jeanty",
+      "seat": 9,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0037248",
+      "raw_input": "James Cook III",
+      "seat": 8,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0032764",
+      "raw_input": "Derrick Henry",
+      "seat": 7,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0035676",
+      "raw_input": "A.J. Brown",
+      "seat": 6,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0034844",
+      "raw_input": "Saquon Barkley",
+      "seat": 5,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0040666",
+      "raw_input": "Omarion Hampton",
+      "seat": 4,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0037239",
+      "raw_input": "Chris Olave",
+      "seat": 3,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0037247",
+      "raw_input": "George Pickens",
+      "seat": 2,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0036554",
+      "raw_input": "Nico Collins",
+      "seat": 1,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0035700",
+      "raw_input": "Josh Jacobs",
+      "seat": 0,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "6769",
+      "raw_input": "Jeremiyah Love",
+      "seat": 0,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0034857",
+      "raw_input": "Josh Allen",
+      "seat": 1,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0038134",
+      "raw_input": "Kenneth Walker III",
+      "seat": 2,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0039064",
+      "raw_input": "Zay Flowers",
+      "seat": 3,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0037740",
+      "raw_input": "Garrett Wilson",
+      "seat": 4,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0038120",
+      "raw_input": "Breece Hall",
+      "seat": 5,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0036912",
+      "raw_input": "DeVonta Smith",
+      "seat": 6,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0040715",
+      "raw_input": "Cam Skattebo",
+      "seat": 7,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0037840",
+      "raw_input": "Kyren Williams",
+      "seat": 8,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0040129",
+      "raw_input": "Emeka Egbuka",
+      "seat": 9,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0040124",
+      "raw_input": "Tetairoa McMillan",
+      "seat": 10,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0039337",
+      "raw_input": "Malik Nabers",
+      "seat": 11,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0037744",
+      "raw_input": "Trey McBride",
+      "seat": 11,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0036997",
+      "raw_input": "Javonte Williams",
+      "seat": 10,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0036973",
+      "raw_input": "Travis Etienne Jr.",
+      "seat": 9,
+      "at": "2026-08-24T18:00:00Z"
+    },
+    {
+      "kind": "PICK",
+      "player_id": "00-0036410",
+      "raw_input": "Tee Higgins",
+      "seat": 8,
+      "at": "2026-08-24T18:00:00Z"
+    }
+  ]
+}

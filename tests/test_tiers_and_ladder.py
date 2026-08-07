@@ -13,10 +13,16 @@ import pytest
 from src.app.cockpit.ladder import recommend
 from src.core.errors import DataError
 from src.engine.decision.ladder_tiers import (
-    DrawCache, StageTimings, make_tier0, make_tier1, make_tier3,
+    DrawCache,
+    StageTimings,
+    make_tier0,
+    make_tier1,
+    make_tier3,
 )
 from src.engine.decision.tiers import (
-    assign_tiers, build_tier_table, tier3_recommendation,
+    assign_tiers,
+    build_tier_table,
+    tier3_recommendation,
 )
 
 
@@ -162,9 +168,8 @@ def test_timings_are_recorded_even_when_a_stage_raises():
     """The timing of a failure is what distinguishes a timeout from an instant
     crash, which is the whole diagnostic question after a demotion."""
     timings = StageTimings()
-    with pytest.raises(ValueError):
-        with timings.stage("boom"):
-            raise ValueError("x")
+    with pytest.raises(ValueError), timings.stage("boom"):
+        raise ValueError("x")
     assert "boom" in timings.stage_timings_ms
 
 

@@ -17,7 +17,6 @@ import json
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -26,7 +25,10 @@ from src.core.config import load_league  # noqa: E402
 from src.domain.scoring.engine import score_offense  # noqa: E402
 from src.models.features.assemble import assemble_season  # noqa: E402
 from src.models.projection.calibrate import (  # noqa: E402
-    IntervalCalibrator, assign_bucket, calibrate_oof_lofo, coverage_by_bucket,
+    IntervalCalibrator,
+    assign_bucket,
+    calibrate_oof_lofo,
+    coverage_by_bucket,
 )
 from src.models.projection.folds import make_expanding_folds  # noqa: E402
 from src.models.projection.quantile_model import QuantileGBM  # noqa: E402
@@ -61,7 +63,7 @@ def load_frames(seasons: list[int], target: int, entries: list) -> tuple[dict, d
     if {"pfr_id", "gsis_id"} <= set(id_map.columns):
         pairs = id_map[["pfr_id", "gsis_id"]].dropna()
         pfr_to_gsis = dict(zip(pairs["pfr_id"].astype(str),
-                               pairs["gsis_id"].astype(str)))
+                               pairs["gsis_id"].astype(str), strict=False))
 
     frames = {
         "players": players,

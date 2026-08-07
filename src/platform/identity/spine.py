@@ -36,7 +36,9 @@ import yaml
 
 from src.core.errors import ConfigError
 from src.platform.identity.match import (
-    FUZZY_MIN_MARGIN, FUZZY_MIN_SCORE, normalize_name,
+    FUZZY_MIN_MARGIN,
+    FUZZY_MIN_SCORE,
+    normalize_name,
 )
 
 DEFAULT_OVERRIDES: Final = Path("config/id_overrides.yaml")

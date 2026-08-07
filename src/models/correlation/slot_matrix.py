@@ -25,8 +25,8 @@ normalization, no sign ambiguity, no convergence triggers.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 import numpy as np
 import pandas as pd
@@ -96,13 +96,13 @@ class CorrelationPosterior:
     resamples used as theta in the two-level loop (§15.5).
     """
 
-    point: "SlotCorrelation"
-    draws: tuple["SlotCorrelation", ...]
+    point: SlotCorrelation
+    draws: tuple[SlotCorrelation, ...]
 
     def __len__(self) -> int:
         return len(self.draws)
 
-    def draw(self, k: int) -> "SlotCorrelation":
+    def draw(self, k: int) -> SlotCorrelation:
         """Theta_k. Wraps around so a deep allocator run never runs out."""
         return self.draws[k % len(self.draws)] if self.draws else self.point
 

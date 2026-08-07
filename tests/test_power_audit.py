@@ -8,13 +8,16 @@ for a gate that could not detect anything.
 """
 from __future__ import annotations
 
-import numpy as np
 import pytest
 import yaml
 
 from src.core.errors import ConfigError
 from src.engine.audit.power import (
-    Gate, evaluate, load_assumptions, power_table, required_n,
+    Gate,
+    evaluate,
+    load_assumptions,
+    power_table,
+    required_n,
 )
 
 

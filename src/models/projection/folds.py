@@ -12,24 +12,24 @@ subpackage this layer may import (§9.0, §11.3).
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import List, Sequence
 
 
 @dataclass
 class Fold:
-    train_seasons: List[int]
+    train_seasons: list[int]
     test_season: int
 
 
-def make_expanding_folds(seasons: Sequence[int], min_train_seasons: int) -> List[Fold]:
+def make_expanding_folds(seasons: Sequence[int], min_train_seasons: int) -> list[Fold]:
     """One fold per evaluable test season; train = all strictly-earlier seasons.
 
     A test season is evaluable once at least ``min_train_seasons`` earlier seasons
     exist.
     """
     uniq = sorted(set(int(s) for s in seasons))
-    folds: List[Fold] = []
+    folds: list[Fold] = []
     for i, test_season in enumerate(uniq):
         train = uniq[:i]
         if len(train) >= min_train_seasons:

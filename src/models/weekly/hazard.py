@@ -102,7 +102,7 @@ class HazardModel:
                 "snapshot_id": self.snapshot_id, "model_version": self.model_version}
 
     @classmethod
-    def from_dict(cls, raw: dict) -> "HazardModel":
+    def from_dict(cls, raw: dict) -> HazardModel:
         return cls(coef=np.asarray(raw["coef"], dtype=float),
                    positions=tuple(raw["positions"]),
                    base_rate=float(raw["base_rate"]),
@@ -171,7 +171,7 @@ def build_hazard_panel(weekly: pd.DataFrame, players: pd.DataFrame,
     # fielded nobody. Derived from the same frame rather than the schedule so
     # this function needs exactly one input.
     season_weeks = appeared.groupby("season")["week"].max().to_dict()
-    team_weeks = set(zip(appeared["season"], appeared["team"], appeared["week"]))
+    team_weeks = set(zip(appeared["season"], appeared["team"], appeared["week"], strict=False))
 
     played = (appeared.groupby(["player_id", "season"], as_index=False)["active"]
                       .sum().rename(columns={"active": "games"}))

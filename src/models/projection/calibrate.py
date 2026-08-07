@@ -26,7 +26,6 @@ subpackage this layer may import (§9.0, §11.3).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict
 
 import numpy as np
 import pandas as pd
@@ -52,9 +51,9 @@ class IntervalCalibrator:
     lower_alpha: float = 0.10   # target mass below P10  (=> 0.80 central coverage)
     upper_alpha: float = 0.10   # target mass above P90
     # per bucket: (lower_scale, upper_scale) applied to half-widths around p50
-    scales: Dict[str, tuple] = field(default_factory=dict)
+    scales: dict[str, tuple] = field(default_factory=dict)
 
-    def fit(self, oof: pd.DataFrame) -> "IntervalCalibrator":
+    def fit(self, oof: pd.DataFrame) -> IntervalCalibrator:
         """Fit split-conformal width scales from OOF rows (cols p10,p50,p90,y,bucket).
 
         Targets the nominal 80% central interval (P10..P90) per bucket, falling back

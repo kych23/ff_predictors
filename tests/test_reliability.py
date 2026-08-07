@@ -12,7 +12,9 @@ import pandas as pd
 import pytest
 
 from src.engine.audit.reliability import (
-    _top_k_agreement, reliability, resample_players_within_season,
+    _top_k_agreement,
+    reliability,
+    resample_players_within_season,
 )
 
 

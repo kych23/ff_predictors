@@ -41,12 +41,11 @@ Estimators are Saltelli 2010 / Jansen, which are the low-bias forms:
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Sequence
 
 import numpy as np
 import pandas as pd
-
 
 #: An index outside this band, or a materially negative interaction, is a
 #: finite-sample artifact rather than a finding. Both estimators are unbiased

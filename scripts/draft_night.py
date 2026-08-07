@@ -36,37 +36,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from src.app.cockpit.ledger import DecisionLedger  # noqa: E402
-from src.app.cockpit.session import Session, available  # noqa: E402
+from src.app.cockpit.session import Session  # noqa: E402
+from src.app.web.resolve import build_spine, resolve_name  # noqa: E402
 from src.core.config import load_league, load_strategy  # noqa: E402
 from src.core.errors import DataError  # noqa: E402
 from src.engine.decision.board import Board  # noqa: E402
-from src.platform.identity.spine import Spine  # noqa: E402
 
 
-def build_spine(board: Board) -> Spine:
-    frame = board.players.rename(columns={"player_name": "name"})
-    return Spine(frame[["player_id", "name", "position", "team"]],
-                 snapshot_id=board.snapshot_id)
+def resolve(spine, text: str, board_frame):
+    """Adapter onto the SHARED cascade in `src/app/web/resolve.py`.
 
-
-def resolve(spine: Spine, text: str, board_frame: pd.DataFrame):
-    """Spine first, then a plain substring scan over the board.
-
-    The substring pass exists because the spine is built from the bundle and a
-    typo'd surname is more common at a live draft than a genuinely unknown
-    player. An ambiguous substring returns the candidates so the operator picks
-    rather than the tool guessing.
+    This file used to carry its own copy. Two implementations of name
+    resolution is the same split-brain that produced the K/DST bug — the board
+    and the simulator disagreeing about the same player — so the logic lives in
+    one place and this returns it in the tuple shape the loop below expects.
     """
-    hit = spine.resolve(text)
-    if hit is not None:
-        return hit.player_id, hit.name, hit.tier, []
-    lowered = text.strip().lower()
-    matches = board_frame[
-        board_frame["player_name"].str.lower().str.contains(lowered, regex=False)]
-    if len(matches) == 1:
-        row = matches.iloc[0]
-        return str(row["player_id"]), str(row["player_name"]), "substring", []
-    return None, None, None, [str(r) for r in matches["player_name"].head(6)]
+    resolution = resolve_name(text, spine, board_frame)
+    if resolution.ok:
+        return resolution.player_id, resolution.name, resolution.tier, []
+    return None, None, None, [c.name for c in resolution.candidates]
 
 
 def print_board(frame: pd.DataFrame, state, n: int = 12) -> None:
@@ -83,6 +71,7 @@ def recommend_now(session: Session, board: Board, cfg, strategy, args):
     """Run the ladder for my current pick. Imported lazily so a slow model
     import never delays the first keystroke of a draft."""
     from draft_recommend import build_tiers
+
     from src.app.cockpit.ladder import recommend
 
     scratch = Board.from_bundle()
@@ -139,8 +128,8 @@ def main() -> int:
     board = Board.from_bundle()
     frame = board.players.copy()
     frame["player_id"] = frame["player_id"].astype(str)
-    spine = build_spine(board)
-    name_of = dict(zip(frame["player_id"], frame["player_name"].astype(str)))
+    spine = build_spine(board.players, board.snapshot_id)
+    name_of = dict(zip(frame["player_id"], frame["player_name"].astype(str), strict=False))
 
     session = Session(my_seat=args.seat - 1, teams=cfg.teams,
                       rounds=cfg.roster.rounds,

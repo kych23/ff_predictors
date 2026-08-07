@@ -13,10 +13,14 @@ import pytest
 from src.app.narration.attribution import AttributionRecord, build_record
 from src.app.narration.backends import Clause, response_schema
 from src.app.narration.render import (
-    NarrationConfig, Narration, narrate, record_payload, render_table,
+    NarrationConfig,
+    narrate,
+    record_payload,
+    render_table,
 )
 from src.app.narration.verify import (
-    extract_claims, find_untagged_numerals, gate,
+    extract_claims,
+    gate,
 )
 
 TOL = {"dollars": 0.05, "probability": 0.02, "week": 0.0, "slot": 0.0}
@@ -334,6 +338,7 @@ def test_the_local_backend_only_talks_to_loopback():
 
 def test_backend_preference_puts_local_first():
     import inspect
+
     from src.app.narration.backends import resolve_backend
     source = inspect.getsource(resolve_backend)
     assert source.index("ollama") < source.index("anthropic_backend")

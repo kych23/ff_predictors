@@ -10,9 +10,9 @@ nothing at or after the cutoff survived, and asserts the result is non-empty.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Callable, Mapping
+from datetime import UTC, datetime
 
 import pandas as pd
 
@@ -66,7 +66,7 @@ class AsOf:
             # No schedule registered (unit tests, or a future season): fall back
             # to a conservative Sept 1 boundary rather than silently admitting
             # everything.
-            kickoff = datetime(self.season, 9, 1, tzinfo=timezone.utc)
+            kickoff = datetime(self.season, 9, 1, tzinfo=UTC)
         if self.week is None:
             return kickoff - pd.Timedelta(days=self.as_of_offset_days).to_pytimedelta()
         return kickoff

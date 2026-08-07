@@ -31,8 +31,8 @@ model that actually shipped.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Callable
 
 import numpy as np
 import pandas as pd

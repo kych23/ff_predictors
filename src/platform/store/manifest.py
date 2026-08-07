@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final, Iterable, Sequence
+from typing import Final
 
 _REPO_ROOT: Final = Path(__file__).resolve().parents[3]
 SNAPSHOT_ROOT: Final = _REPO_ROOT / "data" / "snapshots"
@@ -42,7 +43,7 @@ class ManifestEntry:
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def build_snapshot(entries: Iterable[ManifestEntry]) -> str:

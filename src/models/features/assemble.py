@@ -28,14 +28,14 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
 
 from src.core.config.league import LeagueConfig, load_league
-
 from src.platform.asof import guards as lg
+
+from ._utils import json_safe as _json_safe
 from .prior_production import build_prior_production
 from .role_change import build_role_change
 from .team_context import CTX_COLS, build_team_context
@@ -47,7 +47,7 @@ _META_COLS = {"player_id", "season", "position", "is_rookie", "as_of_date",
               "team", "team_y", "last_season"}
 
 
-def _age_at(birth_date, as_of: dt.date) -> Optional[float]:
+def _age_at(birth_date, as_of: dt.date) -> float | None:
     if birth_date is None or (isinstance(birth_date, float) and pd.isna(birth_date)):
         return None
     try:
@@ -83,11 +83,11 @@ def _reg_rows(df: pd.DataFrame) -> pd.DataFrame:
 
 def assemble_season(
     target_season: int,
-    frames: Dict[str, pd.DataFrame],
+    frames: dict[str, pd.DataFrame],
     *,
-    cfg: Optional[LeagueConfig] = None,
-    as_of_date: Optional[dt.date] = None,
-    pfr_to_gsis: Optional[Dict[str, str]] = None,
+    cfg: LeagueConfig | None = None,
+    as_of_date: dt.date | None = None,
+    pfr_to_gsis: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """Assemble all feature blocks for one target season into season_features rows.
 
@@ -159,13 +159,13 @@ def assemble_season(
     # position as-of Y: prefer roster position, else depth, else players table
     pos_map = {}
     if not rosters_y.empty:
-        pos_map = dict(zip(rosters_y["gsis_id"].astype(str), rosters_y["position"]))
-    pos_players = dict(zip(p["player_id"], p.get("position")))
+        pos_map = dict(zip(rosters_y["gsis_id"].astype(str), rosters_y["position"], strict=False))
+    pos_players = dict(zip(p["player_id"], p.get("position"), strict=False))
     df["position"] = df["player_id"].map(pos_map).fillna(df["player_id"].map(pos_players))
 
     # position_changed vs Y-1 roster
     if not rosters_prev.empty:
-        prev_pos = dict(zip(rosters_prev["gsis_id"].astype(str), rosters_prev["position"]))
+        prev_pos = dict(zip(rosters_prev["gsis_id"].astype(str), rosters_prev["position"], strict=False))
         df["position_changed"] = df.apply(
             lambda r: int(r["player_id"] in prev_pos and prev_pos[r["player_id"]] != r["position"]),
             axis=1,
@@ -190,7 +190,7 @@ def assemble_season(
             df[col] = np.nan
 
     # age (explicit feature) + season_length + indicator defaults
-    birth = dict(zip(p["player_id"], p.get("birth_date")))
+    birth = dict(zip(p["player_id"], p.get("birth_date"), strict=False))
     df["age_at_season_start"] = df["player_id"].map(birth).map(lambda b: _age_at(b, as_of_date))
     df["season_length"] = _season_length(Y)
     for flag in ["has_depth_data", "has_college_stats", "is_udfa", "has_combine"]:
@@ -218,5 +218,3 @@ def assemble_season(
         "features": feature_dicts,
     })
 
-
-from ._utils import json_safe as _json_safe

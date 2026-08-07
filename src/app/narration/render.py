@@ -18,12 +18,12 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Mapping
 
 from src.app.narration.attribution import AttributionRecord
 from src.app.narration.backends import (
-    SYSTEM_PROMPT, Clause, resolve_backend,
+    resolve_backend,
 )
 from src.app.narration.verify import GateResult, gate, strip_claims
 
@@ -48,7 +48,7 @@ class NarrationConfig:
                                  "week": 0.0, "slot": 0.0})
 
     @classmethod
-    def from_strategy(cls, strategy) -> "NarrationConfig":
+    def from_strategy(cls, strategy) -> NarrationConfig:
         raw = dict(getattr(strategy.simulation, "narration", {}) or {})
         return cls(
             enabled=bool(raw.get("enabled", True)),
@@ -243,7 +243,7 @@ def _readable(text: str) -> str:
     reads as money and a probability as a percentage; leaving both as bare
     decimals is how "leads on the title 2.40" ends up on screen.
     """
-    from src.app.narration.verify import CLAIM_RE, ATTR_RE
+    from src.app.narration.verify import ATTR_RE, CLAIM_RE
 
     def swap(match) -> str:
         attrs = dict(ATTR_RE.findall(match.group(1)))

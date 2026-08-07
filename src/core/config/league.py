@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Final, Mapping, Sequence
+from typing import Any, Final
 
 import yaml
 
@@ -150,7 +151,7 @@ def _tiles(bands: Sequence[Sequence[float]], lo: float, hi: float, *, where: str
         raise ConfigError(f"{where}: first band starts at {ordered[0][0]}, expected {lo}")
     if ordered[-1][1] != hi:
         raise ConfigError(f"{where}: last band ends at {ordered[-1][1]}, expected {hi}")
-    for prev, nxt in zip(ordered, ordered[1:]):
+    for prev, nxt in zip(ordered, ordered[1:], strict=False):
         if prev[1] >= nxt[0]:
             raise ConfigError(f"{where}: bands {prev} and {nxt} overlap")
         if nxt[0] != prev[1] + 1:

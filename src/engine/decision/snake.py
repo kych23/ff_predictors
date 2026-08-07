@@ -14,8 +14,6 @@ position rename (§10.7).
 """
 from __future__ import annotations
 
-from typing import Dict, Optional
-
 import pandas as pd
 
 from src.core.config.league import LeagueConfig
@@ -28,7 +26,7 @@ def seat_on_clock(rnd: int, seat_index: int, teams: int) -> int:
     return teams - seat_index + 1
 
 
-def has_open_slot(position: str, slot_fill: Dict[str, int], cfg: LeagueConfig) -> bool:
+def has_open_slot(position: str, slot_fill: dict[str, int], cfg: LeagueConfig) -> bool:
     if slot_fill.get(position, 0) < cfg.roster.slots.get(position, 0):
         return True
     if position in cfg.roster.flex_eligible and \
@@ -37,7 +35,7 @@ def has_open_slot(position: str, slot_fill: Dict[str, int], cfg: LeagueConfig) -
     return slot_fill.get("BENCH", 0) < cfg.roster.slots.get("BENCH", 0)
 
 
-def fill_slot(position: str, slot_fill: Dict[str, int], cfg: LeagueConfig) -> None:
+def fill_slot(position: str, slot_fill: dict[str, int], cfg: LeagueConfig) -> None:
     if slot_fill.get(position, 0) < cfg.roster.slots.get(position, 0):
         slot_fill[position] = slot_fill.get(position, 0) + 1
     elif position in cfg.roster.flex_eligible and \
@@ -47,8 +45,8 @@ def fill_slot(position: str, slot_fill: Dict[str, int], cfg: LeagueConfig) -> No
         slot_fill["BENCH"] = slot_fill.get("BENCH", 0) + 1
 
 
-def bot_pick(board: pd.DataFrame, drafted: set, slot_fill: Dict[str, int],
-            cfg: LeagueConfig) -> Optional[str]:
+def bot_pick(board: pd.DataFrame, drafted: set, slot_fill: dict[str, int],
+            cfg: LeagueConfig) -> str | None:
     """ADP bot: lowest-ADP available player that fits any open slot (pure/flex/bench)."""
     undrafted = board[~board["player_id"].isin(drafted)]
     avail = undrafted.dropna(subset=["adp"]).sort_values("adp")

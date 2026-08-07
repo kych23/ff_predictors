@@ -20,9 +20,9 @@ nobody can fix.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Callable, Iterator
 
 import numpy as np
 import pandas as pd

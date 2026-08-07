@@ -47,3 +47,7 @@ notes/
 
 # Yahoo OAuth token cache (probe + live client)
 .yahoo_token.json
+
+# web cockpit frontend
+web/node_modules/
+web/dist/

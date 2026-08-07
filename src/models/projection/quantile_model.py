@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List
 
 import numpy as np
 import pandas as pd
@@ -60,16 +59,16 @@ class QuantileGBM:
 
     quantiles: tuple = QUANTILES
     params: dict = field(default_factory=lambda: dict(DEFAULT_PARAMS))
-    models: Dict[float, object] = field(default_factory=dict)
-    feature_names: List[str] = field(default_factory=list)
+    models: dict[float, object] = field(default_factory=dict)
+    feature_names: list[str] = field(default_factory=list)
     # training category levels per categorical column; predict() realigns serving
     # frames to these so LightGBM's category codes can never silently permute.
-    categories: Dict[str, list] = field(default_factory=dict)
+    categories: dict[str, list] = field(default_factory=dict)
 
     def fit(self, X: pd.DataFrame, y: pd.Series, *,
             X_val: pd.DataFrame | None = None,
             y_val: pd.Series | None = None,
-            early_stopping_rounds: int = 50) -> "QuantileGBM":
+            early_stopping_rounds: int = 50) -> QuantileGBM:
         """Fit the three quantile models with early stopping + refit.
 
         Early stopping picks the tree count on a holdout (the caller's temporal

@@ -9,10 +9,11 @@ from src.core.config import load_league
 from src.core.errors import ArtifactSnapshotMismatch, DataError
 from src.models import artifacts
 from src.models.correlation.slot_matrix import (
-    DEFAULT_SLOTS, SlotCorrelation, fit_slot_correlation, from_prior,
+    SlotCorrelation,
+    fit_slot_correlation,
+    from_prior,
 )
 from src.models.weekly.kdst import KDSTModel, fit_empirical
-from src.models.weekly.panel import assign_slots, player_season_summary
 from src.models.weekly.variance import WeeklySigmaModel, fit_weekly_sigma
 
 
@@ -158,8 +159,9 @@ def test_thin_pairs_are_shrunk_not_guessed():
 
 def test_prior_matrix_loads_and_factors():
     """The fallback is a checked-in copy of measured data (§13.3)."""
-    import yaml
     from pathlib import Path
+
+    import yaml
     prior = yaml.safe_load(Path("config/correlation_prior.yaml").read_text())
     corr = from_prior(prior)
     assert corr.source == "assumed"
@@ -170,8 +172,9 @@ def test_prior_matrix_loads_and_factors():
 
 def test_prior_matches_the_fitted_matrix_on_real_data():
     """The checked-in prior must not drift from what the data says."""
-    import yaml
     from pathlib import Path
+
+    import yaml
     prior = yaml.safe_load(Path("config/correlation_prior.yaml").read_text())
     fitted_path = Path("data/artifacts")
     npz = sorted(fitted_path.glob("correlation_*.npz"))

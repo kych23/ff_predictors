@@ -11,7 +11,10 @@ import numpy as np
 import pytest
 
 from src.engine.audit.backtest import (
-    BacktestReport, pit_test, pit_values, weekly_high_coverage,
+    BacktestReport,
+    pit_test,
+    pit_values,
+    weekly_high_coverage,
 )
 
 RNG = np.random.default_rng(0)

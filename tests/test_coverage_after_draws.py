@@ -22,7 +22,10 @@ import pytest
 
 from src.core.constants import Z90
 from src.engine.sim.draws import (
-    ProjectionBundle, draw_rates, split_normal_moments, split_normal_ppf,
+    ProjectionBundle,
+    draw_rates,
+    split_normal_moments,
+    split_normal_ppf,
 )
 
 N_PLAYERS = 200

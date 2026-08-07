@@ -76,7 +76,7 @@ class WeeklySigmaModel:
         }
 
     @classmethod
-    def from_dict(cls, raw: dict) -> "WeeklySigmaModel":
+    def from_dict(cls, raw: dict) -> WeeklySigmaModel:
         return cls(
             intercept=float(raw["intercept"]),
             log_mu_coef=float(raw["log_mu_coef"]),

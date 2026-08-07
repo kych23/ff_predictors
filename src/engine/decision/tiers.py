@@ -67,7 +67,7 @@ def build_tier_table(board: pd.DataFrame, *, k: int = DEFAULT_K,
 
     has_adp = "adp" in board.columns
     frames = []
-    for position, group in board.groupby("position", sort=True):
+    for _position, group in board.groupby("position", sort=True):
         g = group.copy()
         g[value_col] = pd.to_numeric(g[value_col], errors="coerce").fillna(0.0)
         # Ties break on ADP. K and DST carry no projected value at all — they

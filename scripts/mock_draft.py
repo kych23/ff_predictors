@@ -32,14 +32,14 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from draft_recommend import build_tiers  # noqa: E402
+
 from src.app.cockpit.ladder import recommend  # noqa: E402
 from src.app.cockpit.ledger import DecisionLedger  # noqa: E402
 from src.app.cockpit.session import Session  # noqa: E402
 from src.core.config import load_league, load_strategy  # noqa: E402
 from src.core.errors import DataError  # noqa: E402
 from src.engine.decision.board import Board  # noqa: E402
-
-from draft_recommend import build_tiers  # noqa: E402
 
 
 def bot_order(frame, rng, noise: float) -> list[str]:
@@ -115,8 +115,8 @@ def main() -> int:
             injected.append("restart")
             print(f"  [chaos] pick {pick_no}: reloaded from disk "
                   f"({len(session.events)} events replayed)")
-        if args.chaos and pick_no == 40 and "zero" not in injected:
-            if session.state.my_roster:
+        if (args.chaos and pick_no == 40 and "zero" not in injected
+                and session.state.my_roster):
                 session.zero_player(session.state.my_roster[0])
                 injected.append("zero")
                 print(f"  [chaos] pick {pick_no}: my RB1 scratched")
@@ -182,7 +182,7 @@ def main() -> int:
               f"max {max(my_latencies):.1f}s   budget {budget:.0f}s")
         print(f"    over budget: {len(over)} of {len(my_latencies)}")
         ok = ok and not over
-    print(f"  TIERS USED: "
+    print("  TIERS USED: "
           + ", ".join(f"tier {t}: {n}" for t, n in sorted(tiers_used.items())))
 
     verdict = ledger.verify()

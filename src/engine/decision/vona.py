@@ -20,8 +20,6 @@ position rename (§10.7).
 """
 from __future__ import annotations
 
-from typing import Optional
-
 import numpy as np
 import pandas as pd
 
@@ -70,7 +68,7 @@ def score_board(
     roster: RosterState,
     replacement: ReplacementLevels,
     *,
-    next_pick: Optional[int],
+    next_pick: int | None,
     value_col: str = "value",
 ) -> pd.DataFrame:
     """Compute the VONA score for every available player.

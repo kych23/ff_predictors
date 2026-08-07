@@ -18,6 +18,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -28,7 +29,11 @@ from src.engine.decision.tiers import build_tier_table, write_tiers  # noqa: E40
 from src.platform import bundle as bundle_mod  # noqa: E402
 from src.platform.identity.match import match_by_name  # noqa: E402
 from src.platform.sources import ffc, nflverse  # noqa: E402
-from src.platform.store.manifest import build_snapshot, utc_now, write_manifest  # noqa: E402
+from src.platform.store.manifest import (  # noqa: E402
+    build_snapshot,
+    utc_now,
+    write_manifest,
+)
 
 DEFAULT_OUT = Path("data/bundles/draft_night_bundle.parquet")
 
@@ -71,6 +76,90 @@ def prior_season_value(season: int, league, entries: list) -> pd.DataFrame:
     agg = agg[agg["games"] >= 1]
     agg["value"] = agg["points"] / agg["games"]
     return agg.rename(columns={"player_display_name": "nfl_name"})
+
+
+ARTIFACTS = Path("data/artifacts")
+
+#: Quantile of the *valued* players at a position used as the stand-in for a
+#: player the identity join could not value. Low enough that any real
+#: projection outranks it, positive enough to be draftable at all.
+REPLACEMENT_QUANTILE = 0.10
+
+
+def _latest_kdst() -> dict | None:
+    hits = sorted(ARTIFACTS.glob("kdst_*.json"))
+    if not hits:
+        return None
+    return json.loads(hits[-1].read_text())["distributions"]
+
+
+def fill_unvalued(frame: pd.DataFrame) -> pd.DataFrame:
+    """Replace placeholder zeros with rankable values.
+
+    A zero is not a low value — it is an unpickable one. Every consumer of this
+    column ranks on it: `recommend.score` shortlists the top few by VONA, and
+    tier 0 only ever simulates candidates that shortlist produced. A player
+    left at 0.0 therefore never reaches the simulator at all, no matter how
+    obviously correct taking him would be.
+
+    Two populations arrive here at zero, for different reasons:
+
+    **K and DST** are outside `modeled_positions`, so the quantile model never
+    covers them and they can never match a prior-season line. They get the mean
+    of their fitted empirical distribution. Without this every kicker and
+    defence is strictly dominated by any warm body, and none is ever drafted —
+    which looks like a defensible streaming strategy and is in fact a data bug.
+
+    **Everyone else** (rookies, and veterans whose name the ADP↔nflverse join
+    missed — "Deebo Samuel Sr." style suffixes are a recurring case) gets the
+    positional replacement floor. `scripts/simulate.py` already does exactly
+    this for the simulation bundle, citing BayesianArchitecture.md §3.4's "never
+    assign them a constant zero"; the board was the half that never got it, so
+    the two disagreed about the same player.
+
+    `coverage` is deliberately left as `no_prior_season` — the value is now
+    usable but it is still not a projection, and the board's `stale:` banner
+    should keep saying so.
+    """
+    out = frame.copy()
+    value = pd.to_numeric(out["value"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    source = out["value_source"].astype(str).to_numpy(dtype=object)
+    positions = out["position"].astype(str).to_numpy()
+
+    kdst = _latest_kdst()
+    n_kdst = 0
+    if kdst is not None:
+        for i, pos in enumerate(positions):
+            if pos in kdst and value[i] <= 0:
+                value[i] = float(kdst[pos]["mean"])
+                source[i] = "kdst_empirical"
+                n_kdst += 1
+    else:
+        missing = int(((value <= 0) & pd.Series(positions).isin(["K", "DST"]).to_numpy()).sum())
+        if missing:
+            print(f"      WARNING: no kdst_*.json artifact — {missing} K/DST rows "
+                  f"stay at 0.0 and CANNOT be drafted. Run scripts/fit_models.py.")
+
+    n_floor = 0
+    for pos in pd.unique(positions):
+        at_pos = positions == pos
+        valued = value[at_pos & (value > 0)]
+        if valued.size == 0:
+            continue
+        floor = float(np.quantile(valued, REPLACEMENT_QUANTILE))
+        fill = at_pos & (value <= 0)
+        if fill.any():
+            value[fill] = floor
+            source[fill] = "replacement_floor"
+            n_floor += int(fill.sum())
+
+    out["value"] = value
+    out["value_source"] = source
+    still_zero = int((value <= 0).sum())
+    print(f"      filled {n_kdst} K/DST from the fitted distribution, "
+          f"{n_floor} at the positional replacement floor"
+          + (f", {still_zero} STILL ZERO" if still_zero else ""))
+    return out
 
 
 def build(season: int, out: Path) -> bundle_mod.Bundle:
@@ -154,6 +243,8 @@ def build(season: int, out: Path) -> bundle_mod.Bundle:
         [_rows(report.matched, True), _rows(report.unresolved_left, False)],
         ignore_index=True,
     ).sort_values("adp").reset_index(drop=True)
+
+    frame = fill_unvalued(frame)
 
     by_cov = frame.groupby(["coverage", "position"]).size()
     print("      bundle composition:")

@@ -32,7 +32,10 @@ from dataclasses import dataclass
 import numpy as np
 
 from src.models.opponents.fit import (
-    Choice, FitResult, fit_managers, league_mean_loglik,
+    Choice,
+    FitResult,
+    fit_managers,
+    league_mean_loglik,
 )
 
 
@@ -122,7 +125,7 @@ def run_gate(
         for _season, idxs in by_season.items():
             labels = [choices[i].manager for i in idxs]
             rng.shuffle(labels)
-            for i, label in zip(idxs, labels):
+            for i, label in zip(idxs, labels, strict=False):
                 c = choices[i]
                 shuffled[i] = Choice(label, c.season, c.overall, c.slot_z,
                                      c.adp, c.position_idx, c.chosen)

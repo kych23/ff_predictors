@@ -166,7 +166,7 @@ def test_rollout_is_crn_stable(league, strategy):
     board = _board()
     a = rollout(board, league, strategy, my_seat=3, root="d" * 32, rep=5)
     b = rollout(board, league, strategy, my_seat=3, root="d" * 32, rep=5)
-    for x, y in zip(a.rosters, b.rosters):
+    for x, y in zip(a.rosters, b.rosters, strict=False):
         assert np.array_equal(x, y)
 
 
@@ -174,7 +174,7 @@ def test_different_reps_give_different_drafts(league, strategy):
     board = _board()
     a = rollout(board, league, strategy, my_seat=3, root="e" * 32, rep=0)
     b = rollout(board, league, strategy, my_seat=3, root="e" * 32, rep=1)
-    assert not all(np.array_equal(x, y) for x, y in zip(a.rosters, b.rosters))
+    assert not all(np.array_equal(x, y) for x, y in zip(a.rosters, b.rosters, strict=False))
 
 
 def test_softmax_prefers_players_near_the_current_pick():
@@ -261,6 +261,7 @@ def test_every_seat_can_field_a_full_lineup_in_a_bye_free_week(league, strategy)
     roster carrying one silently fields short. K/DST and unvalued rookies both
     hit this; §3.4 warns explicitly against the constant zero."""
     import numpy as np
+
     from src.core.config.slots import build_slot_plan
     from src.engine.sim import kernel
 

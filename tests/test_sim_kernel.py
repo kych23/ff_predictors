@@ -7,9 +7,13 @@ import pytest
 from src.core.config import load_league
 from src.core.config.slots import build_slot_plan
 from src.core.constants import Z90, RngKind
-from src.engine.sim import kernel, rng as rng_mod
+from src.engine.sim import kernel
+from src.engine.sim import rng as rng_mod
 from src.engine.sim.draws import (
-    ProjectionBundle, draw_points, draw_rates, split_normal_moments,
+    ProjectionBundle,
+    draw_points,
+    draw_rates,
+    split_normal_moments,
     split_normal_ppf,
 )
 
@@ -183,8 +187,6 @@ def test_conditional_weekly_variance_equals_sigma_w():
 
 
 def test_draws_reproduce_the_slot_correlation():
-    from src.models.correlation.slot_matrix import fit_slot_correlation
-    import pandas as pd
 
     rng = np.random.default_rng(5)
     slots = ["QB1", "RB1", "RB2", "WR1", "WR2", "WR3", "TE1"]

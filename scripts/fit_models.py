@@ -17,15 +17,19 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.config import load_league  # noqa: E402
-from src.domain.scoring.dst import points_allowed_score, score_dst  # noqa: E402
+from src.domain.scoring.dst import score_dst  # noqa: E402
 from src.domain.scoring.engine import score_offense  # noqa: E402
 from src.domain.scoring.kicker import score_kicker  # noqa: E402
 from src.models import artifacts  # noqa: E402
 from src.models.correlation.slot_matrix import (  # noqa: E402
-    bootstrap_posterior, fit_slot_correlation,
+    bootstrap_posterior,
+    fit_slot_correlation,
 )
 from src.models.weekly.hazard import (  # noqa: E402
-    AGE_BUCKETS, MISSED_BUCKETS, build_hazard_panel, fit_hazard,
+    AGE_BUCKETS,
+    MISSED_BUCKETS,
+    build_hazard_panel,
+    fit_hazard,
 )
 from src.models.weekly.kdst import KDSTModel, fit_empirical  # noqa: E402
 from src.models.weekly.panel import assign_slots, player_season_summary  # noqa: E402

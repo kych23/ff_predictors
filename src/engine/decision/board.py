@@ -33,7 +33,7 @@ class Board:
     drafted: set[str] = field(default_factory=set)
 
     @classmethod
-    def from_bundle(cls, path: Path | None = None) -> "Board":
+    def from_bundle(cls, path: Path | None = None) -> Board:
         b = bundle_mod.read(path or DEFAULT_BUNDLE)
         return cls(players=b.board(), snapshot_id=b.snapshot_id,
                    value_source=b.value_source, built_at=b.built_at)

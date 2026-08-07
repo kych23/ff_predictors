@@ -14,7 +14,7 @@ subpackage this layer may import (§9.0, §11.3).
 """
 from __future__ import annotations
 
-from typing import Dict, Mapping, Optional
+from collections.abc import Mapping
 
 import numpy as np
 import pandas as pd
@@ -30,8 +30,8 @@ _SUM_COLS = [
 ]
 
 
-def _season_aggregates(stats: pd.DataFrame, pfr_to_gsis: Optional[Dict[str, str]],
-                       snaps: Optional[pd.DataFrame], opp: Optional[pd.DataFrame],
+def _season_aggregates(stats: pd.DataFrame, pfr_to_gsis: dict[str, str] | None,
+                       snaps: pd.DataFrame | None, opp: pd.DataFrame | None,
                        offense: Mapping[str, float]) -> pd.DataFrame:
     """Per (player_id, season) season-level rate aggregates."""
     if stats.empty:
@@ -150,10 +150,10 @@ def build_prior_production(
     target_season: int,
     *,
     halflife: float = 1.0,
-    pfr_to_gsis: Optional[Dict[str, str]] = None,
-    snaps_prior: Optional[pd.DataFrame] = None,
-    opp_prior: Optional[pd.DataFrame] = None,
-    offense: Optional[Mapping[str, float]] = None,
+    pfr_to_gsis: dict[str, str] | None = None,
+    snaps_prior: pd.DataFrame | None = None,
+    opp_prior: pd.DataFrame | None = None,
+    offense: Mapping[str, float] | None = None,
 ) -> pd.DataFrame:
     """EWMA-decay per-season rates into one prior-production row per player.
 
@@ -162,7 +162,7 @@ def build_prior_production(
     Re-filters defensively: target-season or future rows slipping past the
     caller would be an in-season leak, so they are dropped here too.
     """
-    def _strictly_prior(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    def _strictly_prior(df: pd.DataFrame | None) -> pd.DataFrame | None:
         if df is None or df.empty or "season" not in df.columns:
             return df
         season = pd.to_numeric(df["season"], errors="coerce")

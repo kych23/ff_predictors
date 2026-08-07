@@ -24,9 +24,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 GENESIS_HASH = "0" * 64
 
@@ -110,7 +111,7 @@ class DecisionLedger:
     def close(self) -> None:
         self._conn.close()
 
-    def __enter__(self) -> "DecisionLedger":
+    def __enter__(self) -> DecisionLedger:
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -181,7 +182,7 @@ class DecisionLedger:
         return self._row_to_entry(row) if row else None
 
     # ---------------------------------------------------------- verifying
-    def verify(self) -> "ChainVerification":
+    def verify(self) -> ChainVerification:
         """Recompute the whole chain. Reports the FIRST broken link.
 
         Reporting only the first is deliberate: every entry after a tampered
@@ -189,7 +190,7 @@ class DecisionLedger:
         the one that matters under noise.
         """
         expected_prev = GENESIS_HASH
-        for i, entry in enumerate(self):
+        for entry in self:
             if entry.prev_hash != expected_prev:
                 return ChainVerification(
                     False, entry.id,
@@ -219,9 +220,18 @@ class DecisionLedger:
         return out
 
     def superseded(self) -> list[LedgerEntry]:
-        """Entries later corrected. Kept, never deleted."""
-        winners = {id(e) for e in self.latest_by_pick().values()}
-        return [e for e in self if id(e) not in winners]
+        """Entries later corrected. Kept, never deleted.
+
+        Keyed on the ledger's own row id, NOT Python's ``id()``. Both
+        ``latest_by_pick`` and ``__iter__`` build fresh ``LedgerEntry`` objects
+        from their own cursors, so the two sets never share object identity —
+        whether ``id(e)`` happened to match came down to CPython reusing the
+        address of a just-freed object, which made this return every entry or
+        none depending on unrelated allocation. The row id is the stable
+        identity the table already provides.
+        """
+        winners = {e.id for e in self.latest_by_pick().values()}
+        return [e for e in self if e.id not in winners]
 
     def follow_rate(self) -> float:
         """Fraction of resolved picks where I took the engine's leader.

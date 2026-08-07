@@ -11,7 +11,8 @@ missing one is a silent scoring error that no test of the total would catch.
 """
 from __future__ import annotations
 
-from typing import Final, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 import numpy as np
 import pandas as pd

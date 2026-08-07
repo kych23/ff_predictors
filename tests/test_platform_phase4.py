@@ -13,12 +13,17 @@ from src.core.errors import (
     LeakageError,
     UnregisteredColumnError,
 )
-from src.platform.asof import assert_same_cutoff, availability_of, is_registered
+from src.platform.asof import assert_same_cutoff, availability_of
 from src.platform.asof.handle import asof
 from src.platform.sources import nflverse
 from src.platform.store import blobs, canonicalize
 from src.platform.store.manifest import (
-    ManifestEntry, build_snapshot, diff, read_manifest, utc_now, write_manifest,
+    ManifestEntry,
+    build_snapshot,
+    diff,
+    read_manifest,
+    utc_now,
+    write_manifest,
 )
 
 

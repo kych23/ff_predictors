@@ -26,8 +26,8 @@ Any unentailed claim blocks the render; the caller falls back to
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Mapping
 
 from src.app.narration.attribution import QUANTITIES, AttributionRecord
 
@@ -118,9 +118,7 @@ def find_untagged_numerals(text: str, *, allowed: frozenset[str] = frozenset()
         bare = token.strip(".,;:")
         if bare in allowed:
             continue
-        if NUMERAL_RE.search(token):
-            hits.append(token)
-        elif bare.lower() in SPELLED_NUMBERS:
+        if NUMERAL_RE.search(token) or bare.lower() in SPELLED_NUMBERS:
             hits.append(token)
     return hits
 

@@ -11,7 +11,8 @@ manifest entry, so a change to normalization is itself visible as a change.
 from __future__ import annotations
 
 import json
-from typing import Callable, Final, Mapping
+from collections.abc import Callable
+from typing import Final
 
 Canonicalizer = Callable[[bytes], bytes]
 

@@ -78,7 +78,7 @@ def _load_frames(seasons: list[int]) -> tuple[dict, dict]:
     if {"pfr_id", "gsis_id"} <= set(id_map.columns):
         pairs = id_map[["pfr_id", "gsis_id"]].dropna()
         pfr_to_gsis = dict(zip(pairs["pfr_id"].astype(str),
-                               pairs["gsis_id"].astype(str)))
+                               pairs["gsis_id"].astype(str), strict=False))
 
     frames = {
         "players": players,

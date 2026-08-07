@@ -143,7 +143,7 @@ def build_role_change(
     base.loc[base["team_prev"].isna() & base["team_y"].notna(), "team_changed"] = 1
 
     out = base.merge(depth.drop(columns=["team"], errors="ignore"), on="player_id", how="outer")
-    depth_team_map = (dict(zip(depth["player_id"], depth["team"]))
+    depth_team_map = (dict(zip(depth["player_id"], depth["team"], strict=False))
                       if not depth.empty and "team" in depth.columns else {})
     out["team"] = out["team_y"].fillna(out["player_id"].map(depth_team_map))
 

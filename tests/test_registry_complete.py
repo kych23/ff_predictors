@@ -22,7 +22,10 @@ import pytest
 from src.core.errors import UnregisteredColumnError
 from src.platform.asof.handle import asof
 from src.platform.asof.registry import (
-    REGISTRY, availability_of, is_registered, register,
+    REGISTRY,
+    availability_of,
+    is_registered,
+    register,
 )
 
 

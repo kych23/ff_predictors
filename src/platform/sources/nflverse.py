@@ -12,8 +12,9 @@ asset, which ``manifest.diff`` reports rather than silently absorbing.
 from __future__ import annotations
 
 import io
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Final, Sequence
+from typing import Final
 
 import pandas as pd
 
