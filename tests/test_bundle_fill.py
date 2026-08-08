@@ -153,3 +153,192 @@ def test_the_input_frame_is_not_mutated(kdst_artifact):
     frame = _frame([("K", 0.0)])
     build_bundle.fill_unvalued(frame)
     assert frame.loc[0, "value"] == 0.0
+
+
+# ----------------------------------------- artifact selection is by TIME
+def test_newest_ignores_lexicographic_order(tmp_path):
+    """Artifact filenames end in a snapshot_id, which is a content HASH, so
+    sorting them alphabetically orders them at random.
+
+    This is not hypothetical: with four real projection artifacts on disk,
+    `sorted(glob(...))[-1]` selected a two-day-old file over one written
+    minutes earlier. `build_bundle.load_projections` used that idiom, so a
+    freshly fitted model would be built, stamped and then silently ignored.
+    """
+    import os
+
+    from src.models.artifacts import newest, newest_all
+
+    stale = tmp_path / "projections_sn2_ffffffff.meta.json"
+    fresh = tmp_path / "projections_sn2_00000000.meta.json"
+    stale.write_text("{}")
+    fresh.write_text("{}")
+    os.utime(stale, (1_000_000, 1_000_000))     # older mtime, later name
+    os.utime(fresh, (2_000_000, 2_000_000))
+
+    assert newest("projections_*.meta.json", root=tmp_path) == fresh
+    assert sorted(tmp_path.glob("projections_*.meta.json"))[-1] == stale, (
+        "the fixture must reproduce the inversion this guards")
+    assert newest_all("projections_*.meta.json", root=tmp_path) == [fresh, stale]
+
+
+def test_newest_returns_none_on_an_empty_directory(tmp_path):
+    from src.models.artifacts import newest, newest_all
+
+    assert newest("projections_*.json", root=tmp_path) is None
+    assert newest_all("projections_*.json", root=tmp_path) == []
+
+
+# ------------------------------------- artifact identity has a CODE axis
+def test_code_digest_changes_when_model_source_changes(tmp_path):
+    """`snapshot_id` is a Merkle root over the SOURCE DATA, so identical
+    inputs under changed feature code produce a different artifact carrying an
+    identical id. Observed: fixing the prior-production decay moved Josh
+    Allen's p50 from 20.30 to 20.88 and both artifacts were stamped
+    `sn2_58ced77e1b3cfec91e9fadd6` with the same model_version.
+    """
+    from src.models.artifacts import code_digest
+
+    surface = tmp_path / "src" / "models"
+    surface.mkdir(parents=True)
+    (surface / "m.py").write_text("HALFLIFE = 1.0\n")
+    before = code_digest(("src/models",), root=tmp_path)
+
+    (surface / "m.py").write_text("HALFLIFE = 2.0\n")
+    assert code_digest(("src/models",), root=tmp_path) != before
+
+
+def test_code_digest_is_stable_when_nothing_changes(tmp_path):
+    from src.models.artifacts import code_digest
+
+    surface = tmp_path / "src" / "models"
+    surface.mkdir(parents=True)
+    (surface / "m.py").write_text("X = 1\n")
+    assert (code_digest(("src/models",), root=tmp_path)
+            == code_digest(("src/models",), root=tmp_path))
+
+
+def test_code_digest_notices_a_new_file_and_a_rename(tmp_path):
+    """Filenames are hashed alongside contents, so moving logic between
+    modules registers even when the bytes are unchanged."""
+    from src.models.artifacts import code_digest
+
+    surface = tmp_path / "src" / "models"
+    surface.mkdir(parents=True)
+    (surface / "a.py").write_text("X = 1\n")
+    one = code_digest(("src/models",), root=tmp_path)
+
+    (surface / "b.py").write_text("Y = 2\n")
+    two = code_digest(("src/models",), root=tmp_path)
+    assert two != one
+
+    (surface / "b.py").unlink()
+    (surface / "c.py").write_text("Y = 2\n")
+    assert code_digest(("src/models",), root=tmp_path) != two
+
+
+def test_code_digest_ignores_a_missing_surface(tmp_path):
+    from src.models.artifacts import code_digest
+
+    assert isinstance(code_digest(("src/nonexistent",), root=tmp_path), str)
+
+
+def test_the_real_tree_has_a_nonempty_digest():
+    from src.models.artifacts import CODE_SURFACES, code_digest
+
+    assert len(code_digest()) == 12
+    assert code_digest() != code_digest(CODE_SURFACES[:1])
+
+
+def test_code_digest_ignores_comments_and_docstrings(tmp_path):
+    """Hashing raw bytes made a documentation pass invalidate the parity
+    golden, which trains people to regenerate it reflexively — and a guard
+    that is regenerated on sight has stopped guarding anything."""
+    from src.models.artifacts import code_digest
+
+    surface = tmp_path / "src" / "models"
+    surface.mkdir(parents=True)
+    (surface / "m.py").write_text(
+        '"""Original docstring."""\n\n\ndef f(x):\n    """Doc."""\n    return x + 1\n')
+    before = code_digest(("src/models",), root=tmp_path)
+
+    (surface / "m.py").write_text(
+        '"""Rewritten docstring, much longer now."""\n\n\n'
+        'def f(x):\n    """Different doc."""\n    # a new comment\n    return x + 1\n')
+    assert code_digest(("src/models",), root=tmp_path) == before
+
+
+def test_code_digest_still_catches_a_changed_constant(tmp_path):
+    from src.models.artifacts import code_digest
+
+    surface = tmp_path / "src" / "models"
+    surface.mkdir(parents=True)
+    (surface / "m.py").write_text("def f(x):\n    return x + 1\n")
+    before = code_digest(("src/models",), root=tmp_path)
+    (surface / "m.py").write_text("def f(x):\n    return x + 2\n")
+    assert code_digest(("src/models",), root=tmp_path) != before
+
+
+def test_code_digest_survives_a_syntax_error(tmp_path):
+    """A half-saved file must not make the digest throw on every caller."""
+    from src.models.artifacts import code_digest
+
+    surface = tmp_path / "src" / "models"
+    surface.mkdir(parents=True)
+    (surface / "broken.py").write_text("def f(:\n")
+    assert len(code_digest(("src/models",), root=tmp_path)) == 12
+
+
+def test_a_docstring_only_module_stays_parseable(tmp_path):
+    from src.models.artifacts import code_digest
+
+    surface = tmp_path / "src" / "models"
+    surface.mkdir(parents=True)
+    (surface / "m.py").write_text('"""Only a docstring."""\n')
+    assert len(code_digest(("src/models",), root=tmp_path)) == 12
+
+
+_BASE_SOURCE = "def f(a, b):\n    if a < b:\n        return a * 2\n    return b + 1\n"
+
+_SEMANTIC_MUTATIONS = {
+    "flipped_comparison": _BASE_SOURCE.replace("a < b", "a > b"),
+    "reordered_args": _BASE_SOURCE.replace("def f(a, b)", "def f(b, a)"),
+    "changed_literal": _BASE_SOURCE.replace("* 2", "* 3"),
+    "swapped_operator": _BASE_SOURCE.replace("b + 1", "b - 1"),
+    "removed_branch": "def f(a, b):\n    return b + 1\n",
+    "renamed_function": _BASE_SOURCE.replace("def f(", "def g("),
+    "added_default": _BASE_SOURCE.replace("def f(a, b)", "def f(a, b=0)"),
+}
+
+_COSMETIC_MUTATIONS = {
+    "comment": "# new comment\n" + _BASE_SOURCE,
+    "docstring": _BASE_SOURCE.replace(
+        "def f(a, b):\n", 'def f(a, b):\n    """Doc."""\n'),
+    "whitespace": _BASE_SOURCE.replace("    return b + 1", "    return  b+1"),
+}
+
+
+def _digest_after(tmp_path, source):
+    from src.models.artifacts import code_digest
+
+    surface = tmp_path / "src" / "models"
+    surface.mkdir(parents=True, exist_ok=True)
+    (surface / "m.py").write_text(source)
+    return code_digest(("src/models",), root=tmp_path)
+
+
+@pytest.mark.parametrize("name", sorted(_SEMANTIC_MUTATIONS))
+def test_code_digest_catches_every_semantic_change(tmp_path, name):
+    """This digest is what stops the parity golden passing against a different
+    engine, so a miss here silently disarms the only regression guard on the
+    recommendation itself."""
+    before = _digest_after(tmp_path, _BASE_SOURCE)
+    assert _digest_after(tmp_path, _SEMANTIC_MUTATIONS[name]) != before
+
+
+@pytest.mark.parametrize("name", sorted(_COSMETIC_MUTATIONS))
+def test_code_digest_ignores_cosmetic_change(tmp_path, name):
+    """The other failure mode: a guard that fires on prose gets regenerated on
+    sight, and a fixture regenerated on sight has stopped guarding."""
+    before = _digest_after(tmp_path, _BASE_SOURCE)
+    assert _digest_after(tmp_path, _COSMETIC_MUTATIONS[name]) == before

@@ -79,6 +79,19 @@ def synthetic_records(n: int, seed: int = 0) -> list[AttributionRecord]:
                                     f"p{b}": float(rng.uniform(0.4, 0.95))},
             bye_conflicts=[int(rng.integers(5, 14))] if i % 3 == 0 else [],
             names={f"p{a}": names[a], f"p{b}": names[b]},
+            # Football facts on three quarters of the records. The remaining
+            # quarter has none, which exercises the branch where the prompt
+            # must NOT push a football framing — without facts the enum offers
+            # only money, and football words on a dollar figure read worse
+            # than the money framing they replaced.
+            player_facts={} if i % 4 == 1 else {
+                f"p{a}": {"games": round(float(rng.uniform(12, 17)), 1),
+                          "consistency": round(float(rng.uniform(3, 9)), 1),
+                          "adp": round(float(rng.uniform(1, 60)), 1)},
+                f"p{b}": {"games": round(float(rng.uniform(12, 17)), 1),
+                          "consistency": round(float(rng.uniform(3, 9)), 1),
+                          "adp": round(float(rng.uniform(1, 60)), 1)},
+            },
         ))
     return out
 

@@ -27,8 +27,9 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from src.core.constants import SEPARATION_Z
 from src.core.errors import DataError
-from src.engine.decision.allocate import allocate
+from src.engine.decision.allocate import allocate, paired_difference
 from src.engine.decision.recommendation import Recommendation
 from src.engine.decision.tiers import tier3_recommendation
 
@@ -149,10 +150,11 @@ def make_tier1(cache: DrawCache, names: dict[str, str],
             for c in means:
                 if c == leader:
                     continue
-                gap = means[leader] - means[c]
-                se = np.sqrt(aleatory[leader] ** 2 + epistemic[leader] ** 2
-                             + aleatory[c] ** 2 + epistemic[c] ** 2)
-                if abs(gap) < indifference_zone or abs(gap) < 1.645 * se:
+                # PAIRED, like `allocate`. Adding the two marginal variances
+                # drops the CRN covariance, which is where the variance
+                # reduction lives; measured 5.4x too wide on a K=50 pair.
+                gap, se = paired_difference(completed[leader], completed[c])
+                if abs(gap) < indifference_zone or abs(gap) < SEPARATION_Z * se:
                     indifferent.append(c)
 
             ranked = pd.DataFrame(

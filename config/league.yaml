@@ -30,6 +30,10 @@ schedule:
   playoff_teams: 6
   playoff_byes: 2
   matchup_length_weeks: 1
+  # `head_to_head` is accepted but NOT implemented: it can only decide a
+  # tie surviving both wins and points_for, and points_for is a continuous
+  # sum of drawn scores — measured 0 such ties in 20,000 simulated seasons.
+  # Listed because the real league uses it; it simply never fires here.
   seeding_tiebreakers: [wins, points_for, head_to_head]
 
 scoring:

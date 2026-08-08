@@ -3,14 +3,12 @@ import type { Narration } from "../types";
 export function WhyPanel({
   narration,
   separatingAxis,
-  staleFlags,
 }: {
   narration: Narration | null;
   separatingAxis: string;
-  staleFlags: string[];
 }) {
   return (
-    <aside className="w-72 shrink-0 space-y-4 border-l border-line p-4">
+    <aside className="w-72 shrink-0 space-y-4 overflow-y-auto border-l border-line p-4">
       <h2 className="text-xs uppercase tracking-wider text-muted">Why</h2>
 
       {narration ? (
@@ -37,13 +35,10 @@ export function WhyPanel({
         </p>
       )}
 
-      {staleFlags.length > 0 && (
-        <ul className="space-y-1 text-xs text-warn">
-          {staleFlags.map((f) => (
-            <li key={f}>⚠ {f}</li>
-          ))}
-        </ul>
-      )}
+      {/* `stale_flags` is deliberately NOT shown here. It still travels in the
+          payload and into the hash-chained ledger, where the provenance of a
+          recommendation is worth having in November — it is just not what the
+          operator needs in the two seconds before a pick. */}
     </aside>
   );
 }

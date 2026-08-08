@@ -48,7 +48,8 @@ def recommend(slot: int, taken: list[str], mine: list[str], bundle_path: Path,
     position = len(board.drafted) + 1
     current = next((p for p in rs.my_picks if p >= position), rs.my_picks[-1])
     result = rec_mod.score(avail, rs, league, strategy, current_pick=current,
-                           stale_flags=tuple(board.stale_flags(league)))
+                           stale_flags=tuple(board.stale_flags(league)),
+                           preseason_board=board.players)
     scored, levels, nxt = result.ranked, result.replacement, result.next_pick
 
     print(f"\n  snapshot {board.snapshot_id}   built {board.built_at}")

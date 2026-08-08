@@ -9,7 +9,10 @@ import pandas as pd
 import pytest
 
 from src.core.config import load_league
+from src.models.artifacts import newest
 from src.models.projection.calibrate import (
+    GLOBAL,
+    IntervalCalibrator,
     assign_bucket,
     calibrate_oof_lofo,
     coverage_by_bucket,
@@ -124,6 +127,54 @@ def test_calibrator_only_widens(league):
             oof["p90"] - oof["p10"] - 1e-9).all()
 
 
+def test_fitting_on_calibrated_rows_collapses_the_scales(league):
+    """The shipped calibrator must be fit on RAW OOF, never on the LOFO frame.
+
+    `calibrate_oof_lofo` returns rows whose intervals are already widened, so
+    their nonconformity scores are ~1 by construction. Fitting on those gives a
+    calibrator that barely widens anything, and the target-season artifact then
+    ships the model's own overconfident quantiles — silently, because the
+    coverage table printed alongside it is computed from the LOFO frame and
+    looks fine. train_projection_v2.py had exactly this bug.
+    """
+    rng = np.random.default_rng(11)
+    oof = _oof(rng, width_factor=0.65)
+    calibrated = calibrate_oof_lofo(oof, league.training.min_bucket_n)
+
+    correct = IntervalCalibrator(league.training.min_bucket_n).fit(oof)
+    double = IntervalCalibrator(league.training.min_bucket_n).fit(calibrated)
+
+    ls_correct, us_correct = correct.scales[GLOBAL]
+    ls_double, us_double = double.scales[GLOBAL]
+
+    assert ls_correct > 1.3 and us_correct > 1.3, (
+        "fixture is overconfident, so the honest scales must widen materially")
+    assert ls_double < 1.10 and us_double < 1.10, (
+        "double-calibration should be a near no-op — that is the whole bug")
+
+
+def test_the_fitted_scales_actually_widen_a_target_frame(league):
+    """The end-to-end shape of the artifact path: fit on OOF, transform unseen
+    rows. Guards the case where the scales are right but never applied."""
+    rng = np.random.default_rng(12)
+    oof = _oof(rng, width_factor=0.65)
+    target = _oof(rng, n=400, width_factor=0.65)
+
+    calibrator = IntervalCalibrator(league.training.min_bucket_n).fit(oof)
+    widened = calibrator.transform(target[["p10", "p50", "p90"]],
+                                   target["bucket"])
+
+    raw_width = (target["p90"] - target["p10"]).mean()
+    cal_width = (widened["p90"] - widened["p10"]).mean()
+    assert cal_width > raw_width * 1.3
+
+    scored = target.assign(p10=widened["p10"].to_numpy(),
+                           p90=widened["p90"].to_numpy())
+    coverage = float(((scored["y"] >= scored["p10"])
+                      & (scored["y"] <= scored["p90"])).mean())
+    assert abs(coverage - 0.80) < 0.06
+
+
 def test_calibration_preserves_monotonicity(league):
     rng = np.random.default_rng(5)
     calibrated = calibrate_oof_lofo(_oof(rng), league.training.min_bucket_n)
@@ -144,10 +195,10 @@ def test_bucket_assignment_matches_the_canonical_names(league):
 
 # ------------------------------------------------ the real fitted artifact
 def _latest_projection():
-    metas = sorted(ARTIFACTS.glob("projections_*.meta.json"))
-    if not metas:
+    meta_path = newest("projections_*.meta.json", root=ARTIFACTS)
+    if meta_path is None:
         return None, None
-    meta = json.loads(metas[-1].read_text())
+    meta = json.loads(meta_path.read_text())
     frame = pd.read_parquet(ARTIFACTS / f"projections_{meta['snapshot_id']}.parquet")
     return frame, meta
 

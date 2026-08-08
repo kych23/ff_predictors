@@ -48,8 +48,15 @@ class CompiledObjective:
 
     @property
     def needs_bracket(self) -> bool:
-        """False when no prize reads a rank, letting the kernel skip the
-        bracket and the schedule entirely (§16.4)."""
+        """True when some prize reads a rank.
+
+        §16.4 describes this as letting the kernel skip the bracket and the
+        schedule entirely. It does not: `kernel.season_outcome` computes both
+        unconditionally and nothing in `src/` calls this. It is a correct
+        predicate that no caller consults — kept because the optimisation is
+        still the right one to make, but do not read the docstring as a
+        description of what runs today.
+        """
         return any(
             prize.type in ("final_rank", "regular_season_rank")
             for _, prize, _ in self._plan

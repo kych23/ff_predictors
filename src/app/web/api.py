@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from src.app.web import schemas
+from src.app.web import service as svc
 from src.app.web.resolve import AMBIGUOUS
 from src.app.web.service import (
     CockpitService, RunInFlight, SessionExists, ERROR, READY, RUNNING,
@@ -50,6 +51,10 @@ class SessionRequest(BaseModel):
     seat: int = Field(..., ge=0, description="0-indexed draft seat")
     source: str | None = None
     resume: bool = False
+    archive_id: str | None = Field(
+        None, description="with source=replay, which archived draft to replay "
+                          "(an id from GET /api/replays). Omitted replays the "
+                          "configured fixture.")
 
 
 class PickRequest(BaseModel):
@@ -141,7 +146,9 @@ async def create_session(body: SessionRequest) -> dict:
             400, f"seat must be 0..{service.cfg.teams - 1} (0-indexed)")
     source = body.source or service.web_cfg.source
     try:
-        service.start_session(seat=body.seat, source=source, resume=body.resume)
+        service.start_session(seat=body.seat, source=source,
+                              resume=body.resume,
+                              archive_id=body.archive_id)
     except SessionExists as exc:
         raise HTTPException(409, str(exc)) from exc
     except (DataError, ConfigError) as exc:
@@ -159,10 +166,36 @@ async def get_session() -> dict:
 
 
 @app.delete("/api/session")
-async def delete_session() -> dict:
+async def delete_session(
+    purge: bool = Query(False,
+                        description="delete the log instead of archiving it"),
+) -> dict:
+    """Clear the active draft.
+
+    Archiving is the default because it is recoverable. `purge=true` is not,
+    which is why it has to be asked for explicitly rather than being what the
+    obvious button does. The ledger survives both — it is the record of what
+    the engine said, and clearing a screen must not destroy it.
+    """
     service = _service()
-    archived = service.archive_session()
-    return {"status": "archived", "path": str(archived) if archived else None}
+    archived = service.archive_session(purge=purge)
+    return {"status": "deleted" if purge else "archived",
+            "path": str(archived) if archived else None}
+
+
+@app.get("/api/replays")
+async def list_replays() -> dict:
+    """Archived drafts, newest first — what the Replay picker offers.
+
+    Includes the checked-in fixture as a fallback entry so a fresh install has
+    something to replay before any real draft has been archived.
+    """
+    service = _service()
+    archives = svc.list_archives(service.web_cfg)
+    fixture = service.web_cfg.replay_path
+    return {"replays": archives,
+            "fixture": str(fixture) if fixture else None,
+            "count": len(archives)}
 
 
 # -------------------------------------------------------------------- picks
@@ -228,8 +261,11 @@ async def start_recommendation() -> dict:
     _require_session(service)
     try:
         await _launch(service)
-    except RunInFlight as exc:
-        raise HTTPException(409, str(exc)) from exc
+    except RunInFlight:
+        # Not an error condition from the operator's point of view: they asked
+        # for a recommendation and one is being computed. Spam-clicking
+        # Recommend used to surface a raw 409 body on the draft screen.
+        pass
     return {"status": RUNNING}
 
 
@@ -272,6 +308,7 @@ async def _launch(service: CockpitService) -> None:
         status=RUNNING, started_at=_time.monotonic(), generation=generation,
         payload=service.recommendation.payload)
     args = service.build_run_args()
+    service.publish("rec_started", {"generation": generation})
     asyncio.create_task(_run(service, args, generation))
 
 

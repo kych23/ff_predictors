@@ -31,15 +31,19 @@ def _payload(rec, board, **kw):
 
 
 # ------------------------------------------------------------ the headline
-def test_the_leader_is_named_even_when_it_does_not_sort_first(
+def test_the_leader_sorts_first_even_with_a_lower_point_estimate(
         synthetic_board, fake_recommendation):
-    """The observed live case: St. Brown at $44.81 on 2 draws rendered above
-    the recommended Gibbs at $44.64 on 50."""
+    """The observed live case: a 2-draw arm at $44.81 rendered ABOVE the
+    recommended 50-draw arm at $44.64, which reads as the engine arguing with
+    itself. Depth beats point estimate — a two-draw mean carries a standard
+    error two to three times the leader's."""
     payload = _payload(fake_recommendation(), synthetic_board)
     assert payload["leader"] == "rb-00"
-    assert payload["candidates"][0]["player_id"] == "wr-00", (
-        "fixture no longer reproduces the inversion")
-    assert payload["candidates"][0]["e_dollars"] > payload["candidates"][1]["e_dollars"]
+    first, second = payload["candidates"][0], payload["candidates"][1]
+    assert first["player_id"] == "rb-00", "the recommendation must lead"
+    assert first["e_dollars"] < second["e_dollars"], (
+        "fixture no longer reproduces the inversion this guards")
+    assert first["draws"] > second["draws"]
 
 
 def test_the_leader_always_appears_in_candidates(synthetic_board,

@@ -26,6 +26,102 @@ from src.models.weekly.variance import WeeklySigmaModel
 
 ARTIFACT_ROOT: Final = Path("data/artifacts")
 
+_REPO_ROOT: Final = Path(__file__).resolve().parents[2]
+
+#: The source that decides what a recommendation is. `src/models` and
+#: `src/domain` produce the artifact; `src/engine` turns it into an answer.
+#:
+#: `src/engine` is included because of what the golden actually asserts.
+#: `tests/test_refactor_parity.py` pins the LEADER, which comes out of
+#: `build_tiers -> allocate -> rollout -> kernel`. Covering only the model
+#: surfaces would leave a change to the allocator or the kernel with both an
+#: unchanged snapshot_id and an unchanged code_digest, so the golden would go
+#: on comparing against numbers a different engine produced — precisely the
+#: failure this digest exists to catch, on the code the test exercises most.
+#:
+#: `src/app` is deliberately OUT: the cockpit is orchestration and its churn
+#: (web schemas, narration wording) would invalidate the golden constantly
+#: without changing an answer. The one piece of `app` that does move numbers,
+#: `cockpit/build.py`, is the acknowledged gap — a UI-shaped module doing
+#: engine-shaped work, which is a structural problem to fix by moving code,
+#: not by widening a hash.
+CODE_SURFACES: Final = ("src/models", "src/domain", "src/engine")
+
+
+def code_digest(surfaces: tuple[str, ...] = CODE_SURFACES, *,
+                root: Path | None = None) -> str:
+    """Fingerprint of the code that produced an artifact.
+
+    ``snapshot_id`` is a Merkle root over the SOURCE DATA only — source,
+    asset, params, digest — and deliberately so: refetching identical bytes
+    must yield the same id. But that leaves a hole, because it means a change
+    to feature or model code produces a materially different artifact under an
+    unchanged id, which then overwrites its predecessor with nothing recording
+    that anything moved.
+
+    Observed here: fixing the prior-production decay changed Josh Allen's p50
+    from 20.30 to 20.88 and reshuffled the top ten, and both artifacts carried
+    ``sn2_58ced77e1b3cfec91e9fadd6`` and the same ``model_version``. No field
+    anywhere distinguished them.
+
+    The consequence that bites is `tests/test_refactor_parity.py`. It skips
+    when the bundle's snapshot no longer matches the golden's, which is how a
+    stale baseline is meant to announce itself — but a code-only change keeps
+    the snapshot identical, so the golden goes on comparing against numbers a
+    different engine produced and passes. The one guard against a silent
+    change in recommendations was blind to the most likely way one happens.
+
+    This is the code axis of that identity. It is NOT a substitute for
+    `snapshot_id`: data and code are independent reasons for an artifact to
+    differ, and provenance needs both.
+    """
+    import hashlib
+
+    base = root or _REPO_ROOT
+    digest = hashlib.sha256()
+    for surface in sorted(surfaces):
+        directory = base / surface
+        if not directory.exists():
+            continue
+        for path in sorted(directory.rglob("*.py")):
+            digest.update(path.relative_to(base).as_posix().encode())
+            digest.update(_semantic_source(path).encode())
+    return digest.hexdigest()[:12]
+
+
+def _semantic_source(path: Path) -> str:
+    """The file's code with comments and docstrings removed.
+
+    Hashing raw bytes was the first version and it was too eager: a
+    documentation pass over `src/engine` invalidated the parity golden, which
+    trains whoever hits it to regenerate reflexively. A guard that cries wolf
+    stops being read, and this one exists to be believed.
+
+    Round-tripping through `ast` drops comments and formatting; stripping
+    docstring expressions drops the rest of the prose. What survives is every
+    statement and constant that can change an answer. Falls back to raw bytes
+    on a syntax error rather than silently hashing nothing.
+    """
+    import ast
+
+    text = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return text
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.ClassDef,
+                                 ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        body = node.body
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            # A lone docstring is the whole body for a stub; keep it valid.
+            node.body = body[1:] or [ast.Pass()]
+    return ast.unparse(ast.fix_missing_locations(tree))
+
 
 @dataclass(frozen=True)
 class ArtifactSet:
@@ -54,6 +150,29 @@ class ArtifactSet:
             raise ArtifactSnapshotMismatch(
                 f"artifacts disagree with snapshot {self.snapshot_id}: {bad}"
             )
+
+
+def newest(pattern: str, *, root: Path | None = None) -> Path | None:
+    """The most recently WRITTEN artifact matching `pattern`, or None.
+
+    Every caller that wants "the latest artifact" must come through here.
+    ``sorted(glob(...))[-1]`` looks like it does this and does not: artifact
+    filenames end in a snapshot_id, which is a content hash, so lexicographic
+    order is effectively random. Measured on a real directory, that idiom
+    selected a two-day-old projections file over one written minutes earlier —
+    in `build_bundle`, which means a freshly fitted model gets built, stamped,
+    and then silently ignored on draft night.
+
+    mtime is the right key precisely because snapshot ids carry no ordering.
+    """
+    hits = list((root or ARTIFACT_ROOT).glob(pattern))
+    return max(hits, key=lambda p: p.stat().st_mtime) if hits else None
+
+
+def newest_all(pattern: str, *, root: Path | None = None) -> list[Path]:
+    """Matches newest-first. Same ordering rule as `newest`."""
+    return sorted((root or ARTIFACT_ROOT).glob(pattern),
+                  key=lambda p: p.stat().st_mtime, reverse=True)
 
 
 def _path(name: str, snapshot_id: str, ext: str, root: Path | None = None) -> Path:

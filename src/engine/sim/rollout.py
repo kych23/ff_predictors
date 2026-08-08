@@ -117,6 +117,7 @@ def rollout(board: pd.DataFrame, cfg, strategy, *, my_seat: int,
     """
     tau = float(strategy.opponents.defaults["params"]["tau"])
     caps = dict(strategy.max_per_position)
+    early_caps = dict(getattr(strategy, "early_round_caps", {}) or {})
     rosters: list[list[int]] = [[] for _ in range(cfg.teams)]
     taken: set[int] = set()
     counts = [dict() for _ in range(cfg.teams)]
@@ -148,7 +149,8 @@ def rollout(board: pd.DataFrame, cfg, strategy, *, my_seat: int,
             row = forced_row
             forced_row = None
         elif seat == my_seat:
-            row = _my_pick(board, candidates, cfg, counts[seat], pick_no)
+            row = _my_pick(board, candidates, cfg, counts[seat], pick_no,
+                           early_round_caps=early_caps, teams=cfg.teams)
         else:
             u = float(rng_mod.uniforms(root, RngKind.DRAFT, n=rep + 1,
                                        a=seat, b=pick_no)[rep])
@@ -164,15 +166,35 @@ def rollout(board: pd.DataFrame, cfg, strategy, *, my_seat: int,
 
 
 def _my_pick(board: pd.DataFrame, candidates: np.ndarray, cfg,
-             counts: dict[str, int], pick_no: int) -> int:
+             counts: dict[str, int], pick_no: int,
+             early_round_caps: dict | None = None,
+             teams: int | None = None) -> int:
     """AD-12: my future picks use the tier-2 heuristic, not recursion.
 
     Best value over replacement among the legal candidates, which is VONA's
     marginal term without the wait term — the wait term needs a next-pick
     horizon that a rollout does not carry cheaply.
+
+    `early_round_caps` is applied to MY seat only. Without it the rollout keeps
+    doubling up at a position the live recommender refuses to double up at, so
+    every candidate is valued against a future roster the engine would never
+    actually build.
     """
     sub = board.loc[candidates]
     modeled = sub[sub["position"].isin(cfg.roster.modeled_positions)]
-    if modeled.empty:
-        return int(sub["value"].idxmax())
-    return int(modeled["value"].idxmax())
+    pool = sub if modeled.empty else modeled
+
+    if early_round_caps and teams:
+        rnd = (pick_no - 1) // teams + 1
+        blocked = {
+            pos for pos, rule in early_round_caps.items()
+            if rnd <= int(rule.get("through_round", 0))
+            and counts.get(pos, 0) >= int(rule.get("max", 0))
+        }
+        if blocked:
+            allowed = pool[~pool["position"].isin(blocked)]
+            # Only if something is left — a cap must never leave a seat unable
+            # to pick at all.
+            if not allowed.empty:
+                pool = allowed
+    return int(pool["value"].idxmax())

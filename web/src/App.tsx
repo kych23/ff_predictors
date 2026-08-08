@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { BoardPanel } from "./components/BoardPanel";
 import { CandidatePlot } from "./components/CandidatePlot";
+import { DraftBoard } from "./components/DraftBoard";
+import { PickTimer } from "./components/PickTimer";
 import { ClockStrip } from "./components/ClockStrip";
 import { RosterRail } from "./components/RosterRail";
 import { SessionSetup } from "./components/SessionSetup";
@@ -31,7 +34,7 @@ export default function App() {
         setState(null);
         return;
       }
-      const [s, b] = await Promise.all([api.session(), api.board(12)]);
+      const [s, b] = await Promise.all([api.session(), api.board(500)]);
       setState(s);
       setBoard(b.players);
     } catch (e) {
@@ -44,10 +47,15 @@ export default function App() {
   }, [refresh]);
 
   const startSession = useCallback(
-    async (seat: number, source: string, resume: boolean) => {
+    async (
+      seat: number,
+      source: string,
+      resume: boolean,
+      archiveId: string | null = null,
+    ) => {
       setError(null);
       try {
-        await api.createSession(seat, source, resume);
+        await api.createSession(seat, source, resume, archiveId);
         await refresh();
       } catch (e) {
         const msg = String(e);
@@ -66,6 +74,13 @@ export default function App() {
   useEffect(() => {
     const es = new EventSource("/api/stream");
     es.addEventListener("state", (e) => setState(JSON.parse((e as MessageEvent).data)));
+    // Runs can start SERVER-side (`auto_recommend` fires when it becomes my
+    // turn), so completion events alone leave the button looking idle while
+    // the engine is busy.
+    es.addEventListener("rec_started", () => {
+      setStatus("running");
+      setError(null);
+    });
     es.addEventListener("rec_ready", (e) => {
       setRec(JSON.parse((e as MessageEvent).data));
       setStatus("ready");
@@ -110,6 +125,13 @@ export default function App() {
           setChoices([]);
           return;
         }
+        // The recommendation was computed against a board that no longer
+        // exists, so it stops being an answer the moment a pick lands. The
+        // backend already discards its own superseded run on the generation
+        // check; leaving the stale card on screen is the UI half of that.
+        // `auto_recommend` repopulates it when it comes back around to me.
+        setRec(null);
+        setStatus("idle");
         setEntry("");
         await refresh();
       } catch (e) {
@@ -118,6 +140,19 @@ export default function App() {
     },
     [refresh],
   );
+
+  const clearSession = useCallback(async (purge: boolean) => {
+    // Archives by default; `purge` deletes. The ledger is append-only and
+    // untouched either way.
+    await api.clearSession(purge);
+    setState(null);
+    setRec(null);
+    setStatus("idle");
+    setBoard([]);
+    setEntry("");
+    setError(null);
+    await refresh();
+  }, [refresh]);
 
   const runRecommendation = useCallback(async () => {
     setStatus("running");
@@ -141,9 +176,10 @@ export default function App() {
     return (
       <SessionSetup
         league={league}
-        onStart={(seat, source, resume) =>
-          void startSession(seat, source, resume)
+        onStart={(seat, source, resume, archiveId) =>
+          void startSession(seat, source, resume, archiveId)
         }
+        onClear={(purge) => void clearSession(purge)}
         error={error}
       />
     );
@@ -174,18 +210,23 @@ export default function App() {
   );
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <ClockStrip state={state} />
+    <div className="flex h-screen flex-col overflow-hidden">
+      <ClockStrip state={state} onExit={() => void clearSession(false)} />
 
-      <div className="flex flex-1 flex-col lg:flex-row">
-        <RosterRail
-          roster={state.my_roster}
-          board={board}
-          onPick={(player_id) => void submit({ player_id })}
-        />
+      <div className="flex min-h-[8rem] flex-1 flex-col overflow-hidden lg:flex-row">
+        <RosterRail slots={state.roster_slots} />
 
-        <main className="flex-1 p-6">
-          {leaderCard}
+        <main className="min-h-0 flex-1 overflow-y-auto p-6">
+          {/* Timer sits with the recommendation, not in the Why rail: the pick
+              and the clock are the two things read together. */}
+          <div className="flex items-start justify-between gap-6">
+            <div className="min-w-0">{leaderCard}</div>
+            <PickTimer
+              pickNumber={state.pick_number}
+              seconds={state.pick_clock_seconds}
+              size="text-4xl font-semibold shrink-0"
+            />
+          </div>
 
           <div className="mt-6 max-w-2xl">
             {status === "running" ? (
@@ -242,6 +283,13 @@ export default function App() {
 
           {error && <p className="mt-3 text-sm text-warn">{error}</p>}
 
+          <BoardPanel
+            players={board}
+            query={entry}
+            onPick={(player_id) => void submit({ player_id })}
+          />
+
+
           {choices && choices.length > 0 && (
             <div className="mt-3 max-w-2xl">
               <p className="mb-2 text-sm text-muted">Which one?</p>
@@ -278,9 +326,21 @@ export default function App() {
         <WhyPanel
           narration={rec?.narration ?? null}
           separatingAxis={rec?.separating_axis ?? ""}
-          staleFlags={rec?.stale_flags ?? []}
         />
       </div>
+
+      {/* Full width, below the three columns. Twelve teams do not fit inside
+          the centre column — the last seats fell off the edge behind a
+          horizontal scrollbar, and those are the ones whose picks you read
+          between. */}
+      <DraftBoard
+        picks={state.picks}
+        teamNames={state.team_names}
+        rounds={state.rounds}
+        mySeat={state.seat}
+        onTheClock={state.on_the_clock}
+        pickNumber={state.pick_number}
+      />
     </div>
   );
 }

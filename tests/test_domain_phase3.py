@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -120,15 +121,42 @@ def test_dst_requires_points_allowed(league):
 
 
 def test_implied_points_sign_convention():
-    """nflverse signs spread_line from the HOME perspective (negative = home
-    favored), so the home team's implied points must be the larger share."""
+    """nflverse signs spread_line from the HOME perspective, POSITIVE meaning
+    home favored.
+
+    Measured over 1,408 completed games (2020-2024):
+    corr(spread_line, home margin) = +0.439, and on the 333 games with
+    |spread| > 7 the home team won 84.6% of the time when the line was
+    positive against 21.5% when it was negative.
+
+    The previous version of this test asserted the opposite and passed,
+    because the function it guarded had the same inversion. A test that
+    encodes a convention has to be checked against the data, not against the
+    implementation it is protecting.
+    """
     total = pd.Series([45.0, 45.0])
-    spread = pd.Series([-7.0, -7.0])  # home favored by 7
+    spread = pd.Series([7.0, 7.0])          # POSITIVE = home favored by 7
     home = implied_points(total, spread, is_home=pd.Series([True, True]))
     away = implied_points(total, spread, is_home=pd.Series([False, False]))
-    assert home.iloc[0] == pytest.approx(26.0)
+    assert home.iloc[0] == pytest.approx(26.0), "the favourite scores more"
     assert away.iloc[0] == pytest.approx(19.0)
     assert (home + away).iloc[0] == pytest.approx(45.0)
+
+
+def test_both_implied_points_implementations_agree():
+    """The actual defect: one formula, two implementations, no shared source.
+    Whichever is edited next, they must not drift apart again."""
+    from src.models.features._utils import schedule_to_team_lines
+
+    sched = pd.DataFrame([{"home_team": "AAA", "away_team": "BBB",
+                           "total_line": 45.0, "spread_line": 7.0}])
+    lines = schedule_to_team_lines(sched).set_index("team")
+    home = implied_points(pd.Series([45.0]), pd.Series([7.0]),
+                          is_home=pd.Series([True])).iloc[0]
+    away = implied_points(pd.Series([45.0]), pd.Series([7.0]),
+                          is_home=pd.Series([False])).iloc[0]
+    assert lines.at["AAA", "implied_pts"] == pytest.approx(home)
+    assert lines.at["BBB", "implied_pts"] == pytest.approx(away)
 
 
 # ---------------------------------------------------------------- lineup
@@ -275,8 +303,22 @@ def test_weekly_high_score_pays_once_per_week(league):
     rng = np.random.default_rng(3)
     sim = _outcome(rng, league=league)
     weekly = obj.decompose(sim)["weekly_high"]
-    # 14 weeks x $6, distributed each week
-    assert np.allclose(weekly.sum(axis=0), 14 * 6.0)
+    amount, weeks = _weekly_prize(st)
+    # one payout per qualifying week, distributed across teams each week
+    assert np.allclose(weekly.sum(axis=0), weeks * amount)
+
+
+def _weekly_prize(st):
+    """The live weekly amount and its week count, read off the config.
+
+    Hardcoding "14 x $6" made a payout change (weekly 6 -> 9) read as two
+    broken reducers. What these tests assert is that a per-week prize pays
+    once per week and that split ties conserve it — neither claim is about
+    the dollar figure.
+    """
+    prize = next(p for p in st.payout.prizes if p.type == "weekly_high_score")
+    weeks = prize.weeks.end - prize.weeks.start + 1
+    return prize.amount.resolve(st.payout.pot(12)), weeks
 
 
 def test_split_ties_conserve(league):
@@ -292,7 +334,8 @@ def test_split_ties_conserve(league):
         my_team_index=0,
     )
     week1 = obj.decompose(sim)["weekly_high"]
-    assert week1.sum() == pytest.approx(14 * 6.0)
+    amount, weeks = _weekly_prize(st)
+    assert week1.sum() == pytest.approx(weeks * amount)
 
 
 def test_my_dollars_selects_my_row(league):
@@ -356,3 +399,19 @@ def test_scoring_reconciles_against_nflverse_with_explained_deltas(league):
         f"{int((residual > 1e-9).sum())} rows disagree with nflverse beyond the "
         f"two known scoring differences; max residual {residual.max():.4f}"
     )
+
+
+def test_head_to_head_is_configured_but_unreachable():
+    """It is accepted and skipped. That is fine — it can only decide a tie
+    surviving BOTH wins and points_for, and points_for is a continuous sum of
+    drawn scores; measured 0 such ties in 20,000 simulated seasons. What was
+    wrong is that the skip was silent, so an auditor reading league.yaml would
+    believe a rule was being applied that never runs."""
+    from src.core.config import load_league
+
+    league = load_league()
+    assert "head_to_head" in league.schedule.seeding_tiebreakers
+    src = Path("src/domain/schedule/bracket.py").read_text()
+    assert "NOT IMPLEMENTED" in src, "the skip must say so out loud"
+    cfg_src = Path("config/league.yaml").read_text()
+    assert "NOT implemented" in cfg_src, "and so must the config that lists it"

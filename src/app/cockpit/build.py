@@ -39,6 +39,7 @@ from src.engine.decision import roster_state as rs_mod
 from src.engine.decision.allocate import allocate
 from src.engine.decision.board import Board
 from src.engine.decision.recommendation import Recommendation
+from src.engine.decision.survival import survival_probability
 from src.engine.sim import kernel
 from src.engine.sim import rng as rng_mod
 from src.engine.sim.bundle_build import (
@@ -48,6 +49,123 @@ from src.engine.sim.bundle_build import (
 )
 from src.engine.sim.draws import draw_points
 from src.engine.sim.rollout import rollout
+
+
+def _player_facts(rows: list[str], proj, frame, pid_of: dict) -> dict:
+    """Verifiable football facts for the narration (§18).
+
+    Every value here comes off the board or a fitted model, so the gate can
+    check a clause about it. That is the whole point: "he misses fewer games"
+    is only worth saying if someone can tell whether it is true.
+
+    * `games`        expected games from the fitted availability hazard
+    * `consistency`  weekly sigma — LOWER is steadier, stated that way in the prompt
+    * `adp`          market draft position
+
+    Not included, and not an oversight: team changes, target share, depth-chart
+    moves. The bundle carries a current team and no history, so none of it is
+    checkable, and an unverifiable clause is what the gate exists to reject.
+    """
+    out: dict[str, dict[str, float]] = {}
+    for row in rows:
+        i = int(row)
+        facts: dict[str, float] = {}
+        try:
+            facts["games"] = round(float(proj.games_hazard[i].sum()), 1)
+            facts["consistency"] = round(float(proj.weekly_sigma[i]), 1)
+        except Exception:                  # noqa: BLE001 — never cost a pick
+            pass
+        adp = frame.at[i, "adp"] if "adp" in frame.columns else None
+        if adp is not None and not pd.isna(adp):
+            facts["adp"] = round(float(adp), 1)
+        if facts:
+            out[pid_of[row]] = facts
+    return out
+
+
+def _cell(frame: pd.DataFrame, row: int, column: str):
+    """Optional board column, or None — boards vary by source and tier."""
+    if column not in frame.columns:
+        return None
+    value = frame.at[row, column]
+    return None if pd.isna(value) else value
+
+
+def _bye_of(frame: pd.DataFrame, row: int) -> int | None:
+    value = _cell(frame, row, "bye_week")
+    if value is None:
+        return None
+    week = int(value)
+    return week if week > 0 else None      # 0 encodes "no bye on record"
+
+
+def my_roster_rows(frame: pd.DataFrame, row_of: dict[str, int],
+                   my_roster: list[str] | None) -> list[dict]:
+    """My drafted players as `RosterState` rows, board columns attached.
+
+    `team` and `bye_week` ride along for the NARRATION only. They do not feed
+    the objective — `sim.kernel.starter_values` masks byes week by week off
+    the bundle's own `bye_weeks`, so a clustered-bye roster already loses
+    dollars in the simulation. Carrying them here is what lets the engine say
+    WHY, instead of silently docking a player and explaining something else.
+    """
+    rows = []
+    for pid in (my_roster or []):
+        row = row_of.get(str(pid))
+        if row is None:
+            continue
+        rows.append({
+            "player_id": str(pid),
+            "position": str(frame.at[row, "position"]),
+            "team": _cell(frame, row, "team"),
+            "bye_week": _bye_of(frame, row),
+        })
+    return rows
+
+
+def _survival_probabilities(frame: pd.DataFrame, rows: list[str],
+                            pid_of: dict, next_pick: int | None) -> dict:
+    """P(each candidate is still on the board at MY next turn).
+
+    The record has carried this field since §18 and the production caller
+    never passed it, so `allowed_subjects` returned an empty `probability`
+    list, the schema enum could not contain a probability subject, and
+    `verify`'s probability rule was unreachable. The narration's only market
+    input was switched off — the same failure as `bye_conflicts`, on the fact
+    that most often decides a pick: whether waiting is even an option.
+
+    None when there is no next pick. At the last turn nothing survives to a
+    turn that does not exist, and 1.0 would read as "he is certain to last".
+    """
+    if next_pick is None:
+        return {}
+    out: dict[str, float] = {}
+    for row in rows:
+        i = int(row)
+        adp = _cell(frame, i, "adp")
+        if adp is None:
+            continue
+        out[pid_of[row]] = float(survival_probability(
+            float(adp), _cell(frame, i, "adp_stdev"), next_pick))
+    return out
+
+
+def _bye_conflicts(rs, frame: pd.DataFrame, row: int) -> list[int]:
+    """Weeks where taking this player ADDS to an existing bye pile-up.
+
+    Only weeks my roster already occupies count. A player's bye in isolation is
+    not a conflict — every player has one, and flagging all of them would make
+    the signal meaningless.
+
+    This is explanation, not scoring. `kernel.starter_values` already zeroes a
+    player in his bye week, so a clustered-bye roster loses real dollars in the
+    simulation whether or not this list is ever populated. Before this was
+    wired, the engine acted on bye clustering and then declined to mention it.
+    """
+    bye = _bye_of(frame, row)
+    if bye is None:
+        return []
+    return [bye] if rs.my_bye_week_counts().get(bye, 0) > 0 else []
 
 
 def build_tiers(board: Board, cfg, strategy, slot: int, reps: int,
@@ -91,9 +209,7 @@ def build_tiers(board: Board, cfg, strategy, slot: int, reps: int,
             if row is not None:
                 taken_rows[row] = int(seat)
 
-    mine = [{"player_id": str(p), "position": str(frame.at[row_of[str(p)],
-                                                          "position"])}
-            for p in (my_roster or []) if str(p) in row_of]
+    mine = my_roster_rows(frame, row_of, my_roster)
     rs = rs_mod.RosterState(cfg=cfg, draft_position=slot, my_roster=mine,
                             drafted=set(drafted_ids),
                             unresolved_count=unresolved_count)
@@ -107,7 +223,7 @@ def build_tiers(board: Board, cfg, strategy, slot: int, reps: int,
 
     def tier2_fn(_budget: float) -> Recommendation:
         result = tier2.score(avail, rs, cfg, strategy, current_pick=my_pick,
-                             stale_flags=tuple(flags))
+                             stale_flags=tuple(flags), preseason_board=frame)
         live = result.ranked[result.ranked["sink_reason"] == ""]
         leader = live.iloc[0]
         return Recommendation(
@@ -141,6 +257,7 @@ def build_tiers(board: Board, cfg, strategy, slot: int, reps: int,
 
         shortlist_rows = tier2.score(
             avail, rs, cfg, strategy, current_pick=my_pick,
+            preseason_board=frame,
         ).ranked
         live = shortlist_rows[shortlist_rows["sink_reason"] == ""]
         # Address candidates by PLAYER_ID, then map to full-board rows.
@@ -154,12 +271,29 @@ def build_tiers(board: Board, cfg, strategy, slot: int, reps: int,
                       for pid in live.head(shortlist)["player_id"].astype(str)
                       if str(pid) in row_of and str(pid) not in drafted_ids]
 
-        # THETA DRAWS. Each parameter draw uses a different correlation matrix
-        # from the bootstrap posterior, so `epistemic_se` measures parameter
-        # uncertainty rather than rollout variation. §15.1 keeps the aleatory
-        # streams fixed across draws (c = 0), so the ONLY thing varying between
-        # draws is theta — which is what makes the two-level decomposition
-        # mean anything.
+        # OUTER DRAWS. Each one uses a different correlation matrix from the
+        # bootstrap posterior AND a different opponent-draft realization —
+        # `_run` passes `rep=draw` into `rollout`, whose softmax uniforms are
+        # addressed on `rep`.
+        #
+        # This comment used to claim "the ONLY thing varying between draws is
+        # theta". That was not true, and the gap is not small. Pinning the
+        # draft to a single realization and re-running collapses the reported
+        # `epistemic_se` on the two deepest arms from 0.885 to 0.248 and from
+        # 0.799 to 0.190 — roughly **4x**, so most of what the field is named
+        # after is opponent-draft variation, not parameter uncertainty.
+        #
+        # The ESTIMATE is unaffected and remains correct: E[$] must average
+        # over opponent behaviour as well as over theta, and the outer draws
+        # sample that joint distribution, so `total_se` is a valid standard
+        # error of the mean under the design actually run. What is wrong is the
+        # NAME. Anything reasoning about theta specifically — §5.3's elasticity
+        # argument, "is the nuisance parameter larger than the decision" — is
+        # reading a number dominated by something else.
+        #
+        # Separating the two properly needs a crossed theta x draft design,
+        # which multiplies the work per candidate and does not fit the pick
+        # clock. Recorded rather than papered over.
         posterior = load_posterior()
         cache: dict[int, np.ndarray] = {}
 
@@ -261,6 +395,13 @@ def build_tiers(board: Board, cfg, strategy, slot: int, reps: int,
                     roster_slot_affected=str(frame.at[int(result.leader),
                                                       "position"]),
                     names={pid_of[c]: n for c, n in names.items()},
+                    bye_conflicts=_bye_conflicts(rs, frame,
+                                                 int(result.leader)),
+                    survival_probabilities=_survival_probabilities(
+                        frame, [result.leader, runner], pid_of,
+                        rs.next_my_pick(after_overall=my_pick)),
+                    player_facts=_player_facts(
+                        [result.leader, runner], proj, frame, pid_of),
                 )
                 separating_axis = max(record.delta_by_prize,
                                       key=lambda p: abs(record.delta_by_prize[p]))
@@ -283,7 +424,14 @@ def build_tiers(board: Board, cfg, strategy, slot: int, reps: int,
              "adp": frame.at[int(c), "adp"], "E_dollars": e.mean,
              "aleatory_se": e.aleatory_se, "epistemic_se": e.epistemic_se,
              "draws": e.draws_used}
-            for c, e in sorted(result.estimates.items(), key=lambda kv: -kv[1].mean)
+            # Leader first, then by DEPTH, then mean. Sorting purely by mean
+            # floats arms eliminated after two draws above the one the
+            # allocator spent fifty on, which reads as the engine contradicting
+            # its own recommendation.
+            for c, e in sorted(
+                result.estimates.items(),
+                key=lambda kv: (kv[0] != result.leader, -kv[1].draws_used,
+                                -kv[1].mean))
         ])
         return Recommendation(
             tier=0, leader=pid_of[result.leader],

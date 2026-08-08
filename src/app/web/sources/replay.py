@@ -19,11 +19,21 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.app.cockpit.session import MY_PICK, PICK
 from src.app.web.sources.base import DraftEvent, SourceStatus, _QueueSource
 from src.core.errors import DataError
 
-#: Event kinds in a Session log that represent a pick.
-PICK_KINDS = ("PICK", "MY_PICK")
+#: Event kinds in a Session log that represent a pick, taken FROM the session
+#: module rather than spelled again here.
+#:
+#: This was written out as ``("PICK", "MY_PICK")`` — uppercase — while
+#: `Session` emits ``"pick"`` and ``"my_pick"``. Nothing raised: every event in
+#: a real saved draft simply failed the membership test, so replaying an actual
+#: session produced an EMPTY queue and a draft that never advanced. The
+#: checked-in fixture happened to be written in uppercase, so the tests passed
+#: while the documented feature ("any real or rehearsed draft is replayable
+#: with no conversion step") did not work at all.
+PICK_KINDS = (PICK, MY_PICK)
 
 
 @dataclass
@@ -73,7 +83,9 @@ class ReplaySource(_QueueSource):
         events = raw.get("events", []) if isinstance(raw, dict) else raw
         out: list[DraftEvent] = []
         for i, ev in enumerate(events):
-            kind = str(ev.get("kind", ""))
+            # Case-insensitive so the checked-in fixture (written uppercase)
+            # and a real `Session.save` log (lowercase) both replay.
+            kind = str(ev.get("kind", "")).strip().lower()
             if kind not in PICK_KINDS:
                 continue
             # `raw_input` is dropped from the log when empty (Event.to_dict

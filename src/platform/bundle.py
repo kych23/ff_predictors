@@ -28,6 +28,12 @@ REQUIRED_COLUMNS: Final = (
     "value", "value_source", "coverage", "adp", "adp_stdev",
 )
 
+#: The CALIBRATED interval around `value`, carried so the simulator can draw
+#: from the distribution the quantile model actually fitted. Optional because
+#: older bundles predate them and because K/DST never had a quantile model —
+#: NaN means "no calibrated band", and `sim.bundle_build` falls back per row.
+OPTIONAL_COLUMNS: Final = ("value_p10", "value_p90")
+
 #: Declared coverage tiers (§11.4). A row is never silently valueless.
 COVERAGE_TIERS: Final = ("full", "no_prior_season", "unresolved")
 
@@ -67,8 +73,15 @@ class Bundle:
         return self.players[self.players["adp"].notna()].copy()
 
     def board(self) -> pd.DataFrame:
-        """Frame shaped for the tier-2 recommender."""
-        return self.players[list(REQUIRED_COLUMNS)].copy()
+        """Frame shaped for the tier-2 recommender.
+
+        Optional columns ride along when present. `value_p10`/`value_p90` are
+        what the simulator draws the season rate from, and dropping them here
+        silently sent tier 0 back to a synthesized band.
+        """
+        columns = list(REQUIRED_COLUMNS) + [
+            c for c in OPTIONAL_COLUMNS if c in self.players.columns]
+        return self.players[columns].copy()
 
 
 def write(bundle: Bundle, path: Path) -> Path:

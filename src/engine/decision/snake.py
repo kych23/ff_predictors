@@ -1,10 +1,15 @@
 """Snake-draft mechanics: turn order, slot filling, and the ADP-bot heuristic.
 
 Extracted from ``src/benchmark/draft_sim.py`` (deleted in the monte-carlo
-strip — its deterministic single-draft simulation is superseded by the
-Monte Carlo layer) because these pieces are reused elsewhere: the turn/slot
-math is generic snake-draft bookkeeping, and ``_bot_pick`` backs
-``api/draft_service.py``'s bot-pick endpoint (demo/opponent-drafting).
+strip — its deterministic single-draft simulation is superseded by the Monte
+Carlo layer).
+
+**Half of this module is dead.** ``has_open_slot`` and ``fill_slot`` are live.
+``seat_on_clock`` and ``bot_pick`` have no caller anywhere, including tests:
+`rollout` computes the snake seat inline and drafts opponents from the
+league-mean ADP softmax, not from this heuristic. The docstring used to say
+``_bot_pick`` backed ``api/draft_service.py``, which was v1 and no longer
+exists — a live-sounding citation to a deleted file.
 
 
 PORTED from src/recommender/snake.py (DraftEngineDesign.md §9.2).

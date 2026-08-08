@@ -175,14 +175,6 @@ async def test_recommendation_is_idle_before_any_run(client):
     assert body["status"] == "idle"
 
 
-async def test_a_second_run_while_one_is_in_flight_is_409(client, started):
-    from src.app.web.service import RUNNING
-
-    started.recommendation.status = RUNNING
-    resp = await client.post("/api/recommendation")
-    assert resp.status_code == 409
-
-
 async def test_generation_advances_on_every_state_change(client, started):
     """The supersede check depends on this: a run whose generation no longer
     matches is discarded rather than shown against a board that moved."""
@@ -325,3 +317,163 @@ def test_the_repo_root_resolves_to_the_repo_root():
     assert (api_mod._REPO_ROOT / "pyproject.toml").exists(), (
         f"_REPO_ROOT resolved to {api_mod._REPO_ROOT}, which is not the repo")
     assert api_mod.DIST == api_mod._REPO_ROOT / "web" / "dist"
+
+
+async def test_bench_slots_always_render(client):
+    """"Two bench spots left" is a real constraint in the last rounds, and a
+    rail that only lists what you have cannot express it."""
+    body = (await client.get("/api/session")).json()
+    bench = [s for s in body["roster_slots"] if s["slot"] == "BENCH"]
+    assert len(bench) == 6
+    assert all(s["name"] is None for s in bench)
+
+
+async def test_overflow_at_a_position_fills_flex_then_bench(client):
+    """A third WR is a legal FLEX start, so it belongs in FLEX, not the bench.
+    The fourth benches. This mirrors `RosterState._assign_slot` exactly rather
+    than reimplementing it — two answers to "which slot" is the split-brain
+    that produced the K/DST bug."""
+    for pid in ("wr-00", "wr-01", "wr-02", "wr-03"):
+        await client.post("/api/picks", json={"player_id": pid, "seat": 3})
+    slots = (await client.get("/api/session")).json()["roster_slots"]
+    filled = {s["slot"]: [x["name"] for x in slots
+                          if x["slot"] == s["slot"] and x["name"]]
+              for s in slots}
+    assert len(filled["WR"]) == 2
+    assert len(filled["FLEX"]) == 1
+    assert len(filled["BENCH"]) == 1
+
+
+async def test_bench_grows_past_its_configured_size_rather_than_dropping(client):
+    """Never silently lose a drafted player: if more land on the bench than
+    the league configures, show them all."""
+    ids = [f"wr-{i:02d}" for i in range(10)]
+    for pid in ids:
+        await client.post("/api/picks", json={"player_id": pid, "seat": 3})
+    slots = (await client.get("/api/session")).json()["roster_slots"]
+    named = [s["name"] for s in slots if s["name"]]
+    assert len(named) == len(ids), "every drafted player must appear somewhere"
+
+
+async def test_a_second_recommendation_request_is_not_an_error(client, started):
+    """Spam-clicking Recommend used to surface a raw 409 body on the draft
+    screen. Asking for a recommendation while one is computing is the state the
+    operator wanted, not a failure."""
+    from src.app.web.service import RUNNING
+
+    started.recommendation.status = RUNNING
+    resp = await client.post("/api/recommendation")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == RUNNING
+
+
+async def test_a_run_announces_its_start(client, started, monkeypatch):
+    """`auto_recommend` launches server-side, so a client that only hears about
+    completion shows an idle button while the engine is busy."""
+    from src.app.web import api as api_mod
+
+    seen: list[str] = []
+    monkeypatch.setattr(started, "publish",
+                        lambda event, data: seen.append(event))
+    monkeypatch.setattr(started, "run_recommendation",
+                        lambda args: (_ for _ in ()).throw(RuntimeError("stop")))
+    await api_mod._launch(started)
+    assert "rec_started" in seen
+
+
+# ---------------------------------------------------------- draft board
+async def test_the_draft_grid_follows_the_snake(client):
+    """Round 2 reverses. A grid that assumed straight order would attribute
+    every pick after round 1 to the wrong team."""
+    board = (await client.get("/api/board?limit=30")).json()["players"]
+    for p in board[:14]:
+        await client.post("/api/picks", json={"player_id": p["player_id"]})
+    picks = (await client.get("/api/session")).json()["picks"]
+    r1 = [p["seat"] for p in picks if p["round"] == 1]
+    r2 = [p["seat"] for p in picks if p["round"] == 2]
+    assert r1 == list(range(12))
+    assert r2[0] == 11 and r2[1] == 10
+
+
+async def test_an_unresolved_pick_still_occupies_a_grid_cell(client):
+    """Built from the EVENT LOG, not `drafted` — an unresolved pick consumes a
+    slot without adding an id, and deriving the grid from `drafted` would shift
+    every later pick one column left."""
+    await client.post("/api/picks", json={"player_id": "rb-00"})
+    await client.post("/api/picks", json={"raw_name": "Zzzz Nobody",
+                                          "force_unresolved": True})
+    await client.post("/api/picks", json={"player_id": "wr-00"})
+    picks = (await client.get("/api/session")).json()["picks"]
+    assert [p["pick_number"] for p in picks] == [1, 2, 3]
+    assert picks[1]["resolved"] is False
+    assert picks[1]["name"] == "Zzzz Nobody"
+    assert picks[2]["seat"] == 2, "the third pick must not slide left"
+
+
+async def test_my_own_picks_are_flagged_for_the_grid(client):
+    await client.post("/api/picks", json={"player_id": "rb-00", "seat": 3})
+    picks = (await client.get("/api/session")).json()["picks"]
+    assert picks[0]["is_mine"] is True
+
+
+async def test_team_names_default_to_generic_placeholders(client):
+    """Obvious placeholders until the real draft order is known — a wrong name
+    that looks right is worse than one that looks like a placeholder."""
+    body = (await client.get("/api/session")).json()
+    assert body["team_names"] == [f"Team {i + 1}" for i in range(12)]
+
+
+async def test_configured_team_names_are_padded_to_the_league_size(started):
+    """A short list must not shrink the board."""
+    started.web_cfg = started.web_cfg.__class__(
+        **{**started.web_cfg.__dict__, "team_names": ("Griffin", "Echo")})
+    names = started.team_names()
+    assert names[:2] == ["Griffin", "Echo"]
+    assert len(names) == 12 and names[2] == "Team 3"
+
+
+# ------------------------------------------------- archive vs delete
+async def test_archive_keeps_the_log_recoverable(client, started):
+    await client.post("/api/picks", json={"player_id": "rb-00"})
+    body = (await client.delete("/api/session")).json()
+    assert body["status"] == "archived"
+    from pathlib import Path
+    assert Path(body["path"]).exists()
+
+
+async def test_purge_removes_the_log(client, started):
+    """Irreversible, which is why it is a separate request rather than what the
+    obvious button does."""
+
+    await client.post("/api/picks", json={"player_id": "rb-00"})
+    live = started.web_cfg.resolved(started.web_cfg.session_path)
+    assert live.exists()
+    body = (await client.delete("/api/session?purge=true")).json()
+    assert body["status"] == "deleted"
+    assert body["path"] is None
+    assert not live.exists()
+    assert not list(live.parent.glob("*.bak")), "purge must not leave a copy"
+
+
+async def test_neither_archive_nor_purge_touches_the_ledger(client, started):
+    """The ledger is the record of what the engine recommended. Clearing a
+    screen must not destroy it."""
+    from src.app.cockpit.ledger import DecisionLedger
+
+    ledger_path = started.web_cfg.resolved(started.web_cfg.ledger_path)
+    await client.post("/api/picks", json={"player_id": "rb-00"})
+    await client.delete("/api/session?purge=true")
+    assert ledger_path.exists()
+    led = DecisionLedger(ledger_path)
+    try:
+        assert led.verify().ok
+    finally:
+        led.close()
+
+
+async def test_clearing_frees_the_seat_for_a_new_draft(client):
+    await client.delete("/api/session?purge=true")
+    resp = await client.post("/api/session",
+                             json={"seat": 5, "source": "manual"})
+    assert resp.status_code == 200
+    assert resp.json()["seat"] == 5

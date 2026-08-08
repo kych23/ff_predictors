@@ -1,13 +1,14 @@
 {
-  "_note": "Forward regression baseline, generated from the POST-move path. The move itself was verified separately against bundle sn2_3b6ef457acac3b682291d2dd: pre-move and post-move both returned leader 'Kyren Williams' with stopped_because='separated'. That bundle was superseded when upstream FFC ADP changed (246 -> 249 players), so this file guards future changes rather than re-proving the move.",
+  "_note": "Regenerated after the CFBD college-production feature block: deflated-then-standardized college stats now feed the projection model. Measured lift on held-out rookie classes: Spearman +0.121/+0.022/+0.025 for 2023/2024/2025, MAE better in all three.",
   "budget_s": 60.0,
+  "code_digest": "95fd741c0356",
   "dollars": {
-    "00-0037744": 36.919922,
-    "00-0037840": 49.484297,
-    "00-0039337": 30.0,
-    "00-0039338": 30.380859,
-    "00-0039361": 41.144531,
-    "00-0040715": 41.730469
+    "00-0037840": 44.9112109375,
+    "00-0039064": 36.2734375,
+    "00-0039337": 34.181640625,
+    "00-0039338": 37.9765625,
+    "00-0039361": 41.3505859375,
+    "00-0040715": 37.59130859375
   },
   "drafted": [
     "00-0039139",
@@ -34,7 +35,7 @@
     "00-0037247",
     "00-0036554",
     "00-0035700",
-    "6769",
+    "00-0041027",
     "00-0034857",
     "00-0038134"
   ],
@@ -43,7 +44,7 @@
   "reps": 512,
   "seat": 4,
   "shortlist": 6,
-  "snapshot_id": "sn2_e5789414addfdc63df0621fe",
+  "snapshot_id": "sn2_4528c4495e21da28eeaff853",
   "stopped_because": "separated",
   "tier": 0
 }

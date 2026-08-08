@@ -1,9 +1,19 @@
 """Round -> risk appetite schedule.
 
-Swaps the point estimate for a round-shifted quantile: floor-leaning early (~P25,
-protect starters) shifting to ceiling-leaning late (~P85, upside swings). One
-tunable knob — this is where the risk edge changes picks. Using only the middle
-estimate would discard the uncertainty the engine works to produce (§3).
+**NOT WIRED.** `value_vector_at_alpha` has no caller in `src/` or `scripts/`;
+only `round_to_alpha` is touched, by a single test. The paragraph below
+described the intent as though it were running — "this is where the risk edge
+changes picks" — and it changes no picks today.
+
+What actually carries uncertainty into the decision is tier 0: the split-normal
+draws the season rate from the calibrated P10/P50/P90 and the objective prices
+the resulting distribution in dollars. A round-shifted quantile is a tier-2
+heuristic for the same instinct, and reviving it would mean deciding how it
+interacts with that, not just calling it.
+
+Intended behaviour, kept for whoever picks this up: swap the point estimate for
+a round-shifted quantile, floor-leaning early (~P25, protect starters) shifting
+to ceiling-leaning late (~P85, upside swings).
 
 We have P10/P50/P90 per player; the schedule chooses a target quantile alpha by
 round and we piecewise-linearly interpolate the player's value at that alpha.

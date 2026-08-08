@@ -23,7 +23,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.config import load_league  # noqa: E402
 from src.domain.scoring.engine import score_offense  # noqa: E402
+from src.models.artifacts import code_digest  # noqa: E402
 from src.models.features.assemble import assemble_season  # noqa: E402
+from src.models.features.role_change import (  # noqa: E402
+    normalize_depth_charts,
+)
 from src.models.projection.calibrate import (  # noqa: E402
     IntervalCalibrator,
     assign_bucket,
@@ -32,12 +36,64 @@ from src.models.projection.calibrate import (  # noqa: E402
 )
 from src.models.projection.folds import make_expanding_folds  # noqa: E402
 from src.models.projection.quantile_model import QuantileGBM  # noqa: E402
-from src.platform.sources import nflverse  # noqa: E402
+from src.platform.sources import cfbd, nflverse  # noqa: E402
 from src.platform.store.manifest import build_snapshot, write_manifest  # noqa: E402
 
 ARTIFACTS = Path("data/artifacts")
 META_COLS = {"player_id", "season", "position", "as_of_date", "name", "team"}
 TARGET = "fppg"
+
+
+def _college_stats(seasons: list[int], entries: list) -> pd.DataFrame:
+    """CFBD player-season production, or an empty frame if the key is absent.
+
+    Degrading to empty rather than raising is deliberate: CFBD is the only
+    source behind an API key, and a board that cannot be built is worse than
+    one without college features. `build_college_features` emits nulls and the
+    model treats them as missing.
+    """
+    pull = cfbd.season_stats(seasons)
+    entries.append(pull.entry)
+    if pull.frame.empty:
+        print("      college stats: NONE (no CFBD_API_KEY, or the API is down)")
+    else:
+        print(f"      college stats: {len(pull.frame):,} player-seasons "
+              f"over {pull.frame['season'].nunique()} seasons")
+    return pull.frame
+
+
+def _depth_charts(pull, seasons: list[int]) -> pd.DataFrame:
+    """Depth charts across the legacy and current nflverse assets.
+
+    **A single multi-season pull silently loses the recent years.** nflverse's
+    legacy table stops at 2024; 2025 onward live in a differently-shaped feed
+    (``dt``/``pos_abb``/``pos_rank``, no ``season``). Asking for 2011-2026 in
+    one call returns 1.48M rows covering 2011-2024 and nothing raises — which
+    is why `depth_chart_rank` read 93.6% populated in 2024 and 0.0% in 2025 and
+    2026, taking the whole role block with it for exactly the players who have
+    no prior production to fall back on.
+
+    Fetched per era and normalized to the legacy column names, so everything
+    downstream — including the as-of guard — sees one shape.
+    """
+    LEGACY_LAST = 2024
+    frames = []
+    legacy_years = [s for s in seasons if s <= LEGACY_LAST]
+    modern_years = [s for s in seasons if s > LEGACY_LAST]
+    if legacy_years:
+        frames.append(pull("depth_charts", seasons=legacy_years))
+    for season in modern_years:
+        # One call per season: the feed is a per-season asset and a combined
+        # request silently returns only what the legacy table holds.
+        frames.append(normalize_depth_charts(
+            pull("depth_charts", seasons=[season])))
+    usable = [f for f in frames if f is not None and not f.empty]
+    if not usable:
+        return pd.DataFrame()
+    combined = pd.concat(usable, ignore_index=True)
+    print(f"      depth charts: {len(combined):,} rows over "
+          f"{combined['season'].nunique()} seasons")
+    return combined
 
 
 def load_frames(seasons: list[int], target: int, entries: list) -> tuple[dict, dict]:
@@ -71,9 +127,14 @@ def load_frames(seasons: list[int], target: int, entries: list) -> tuple[dict, d
         "stats": pull("player_stats", seasons=played),
         "snaps": pull("snap_counts", seasons=[s for s in played if s >= 2012]),
         "opp": pull("ff_opportunity", seasons=[s for s in played if s >= 2006]),
-        "depth": pull("depth_charts", seasons=seasons),
+        "depth": _depth_charts(pull, seasons),
         "rosters": pull("rosters", seasons=seasons),
         "schedules": pull("schedules"),
+        # A decade back: a 2016 rookie's final college season is 2015, and
+        # veterans on the board still carry the college row from their own
+        # draft year. Three seasons covered only 24% of the board.
+        "cfb_stats": _college_stats(
+            list(range(target - 11, target)), entries),
     }
     return frames, pfr_to_gsis
 
@@ -197,7 +258,17 @@ def main() -> None:
     if target_rows.empty:
         raise SystemExit(f"no feature rows for {args.target}")
     pred = final.predict(target_rows[cols])
-    calibrator = IntervalCalibrator(cfg.training.min_bucket_n).fit(calibrated)
+    # RAW oof, not `calibrated`. The LOFO frame has already had its intervals
+    # widened, so its nonconformity scores are ~1 by construction and fitting
+    # on it returns a no-op calibrator — the shipped artifact would then carry
+    # the model's own overconfident quantiles while this script printed a
+    # coverage table implying otherwise. See test_projection_port.py::
+    # test_fitting_on_calibrated_rows_collapses_the_scales.
+    calibrator = IntervalCalibrator(cfg.training.min_bucket_n).fit(oof)
+    print("      width scales (1.0 = no widening):")
+    for bucket in sorted(calibrator.scales):
+        ls, us = calibrator.scales[bucket]
+        print(f"        {bucket:18s} lower x{ls:.3f}  upper x{us:.3f}")
     out = target_rows[["player_id", "season", "position"]].reset_index(drop=True)
     for q in ("p10", "p50", "p90"):
         out[q] = pred[q].to_numpy()
@@ -215,6 +286,22 @@ def main() -> None:
     write_manifest(snapshot_id, entries)
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     path = ARTIFACTS / f"projections_{snapshot_id}.parquet"
+    meta_path = ARTIFACTS / f"projections_{snapshot_id}.meta.json"
+    digest = code_digest()
+
+    # An artifact is identified by its data AND by the code that fitted it.
+    # Same sources under changed feature code yields the same snapshot_id, so
+    # without this the overwrite is silent and nothing downstream can tell the
+    # two apart — including the parity golden, whose staleness check is keyed
+    # on snapshot_id alone.
+    if meta_path.exists():
+        previous = json.loads(meta_path.read_text()).get("code_digest")
+        if previous and previous != digest:
+            print(f"      ** overwriting {snapshot_id} fitted by DIFFERENT "
+                  f"code ({previous} -> {digest}). The projections may move "
+                  f"under an unchanged snapshot id; regenerate the parity "
+                  f"golden. **")
+
     out.to_parquet(path, index=False)
 
     # Persist the training matrix and the target-season features. The §21.4
@@ -228,13 +315,14 @@ def main() -> None:
         [data[keep], target_rows.reindex(columns=keep)], ignore_index=True,
     ).to_parquet(matrix_path, index=False)
     print(f"      training matrix -> {matrix_path}")
-    (ARTIFACTS / f"projections_{snapshot_id}.meta.json").write_text(json.dumps({
+    meta_path.write_text(json.dumps({
         "snapshot_id": snapshot_id, "model_version": cfg.model_version,
+        "code_digest": digest,
         "target_season": args.target, "n_players": len(out),
         "n_features": len(cols), "folds": len(folds),
     }, indent=2))
     print(f"      {len(out):,} projections -> {path}")
-    print(f"      snapshot {snapshot_id}")
+    print(f"      snapshot {snapshot_id}  code {digest}")
     print()
     top = out.nlargest(10, "p50").merge(
         frames["players"][["player_id", "name"]], on="player_id", how="left")

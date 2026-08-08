@@ -11,7 +11,7 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from src.core.config.league import ScheduleConfig
+from src.core.config.league import ScheduleConfig, bracket_round_sizes
 
 
 def round_robin(teams: int, weeks: int) -> list[list[tuple[int, int]]]:
@@ -64,7 +64,19 @@ def regular_season_ranks(
         elif name == "points_for":
             keys.append(-points_for)
         elif name == "head_to_head":
-            continue  # only well-defined for two-way ties; see docstring
+            # NOT IMPLEMENTED, and deliberately silent about it until now.
+            #
+            # It is unreachable in practice: it can only decide a tie that
+            # survives both `wins` and `points_for`, and points_for is a
+            # continuous sum of drawn scores. Measured over 20,000 simulated
+            # seasons, the number of team-pairs tied on BOTH keys was ZERO.
+            #
+            # So the cost of skipping it is nil — but skipping it SILENTLY is
+            # not. A configured tiebreaker that quietly does nothing reads, to
+            # anyone auditing the payout, as a rule that is being applied.
+            # Falling through to team-index order would be a fixed bias if it
+            # ever did fire.
+            continue
         else:
             raise ValueError(f"unknown seeding tiebreaker {name!r}")
 
@@ -93,9 +105,16 @@ def final_ranks(
       playoff_teams+1..T     non-playoff teams, by regular_rank
     """
     n_teams, _, n_reps = team_week.shape
-    out = np.empty((n_teams, n_reps), dtype="int16")
+    # ZERO-filled, not `np.empty`. A team the bracket fails to place used to
+    # keep whatever was in the buffer, so the failure surfaced as a plausible
+    # rank rather than as an error — and a prize keyed on that rank paid out on
+    # it. The sentinel plus the assertion below turn that into a loud stop.
+    out = np.zeros((n_teams, n_reps), dtype="int16")
     weeks = list(cfg.playoff_weeks)
     m = cfg.matchup_length_weeks
+    # Raises when the shape cannot resolve. Same function `_validate` uses, so
+    # the bracket and the config check cannot disagree about the round sizes.
+    bracket_round_sizes(cfg.playoff_teams, cfg.playoff_byes)
 
     for r in range(n_reps):
         seed_of = {int(regular_rank[t, r]): t for t in range(n_teams)}
@@ -139,6 +158,13 @@ def final_ranks(
         for offset, team in enumerate(missed):
             out[team, r] = cfg.playoff_teams + 1 + offset
 
+    if not ((out >= 1) & (out <= n_teams)).all():
+        missing = int((out < 1).sum())
+        raise ValueError(
+            f"bracket left {missing} team-replication slot(s) unranked; "
+            f"playoff_teams={cfg.playoff_teams} playoff_byes={cfg.playoff_byes} "
+            f"does not resolve to a single champion"
+        )
     return out
 
 

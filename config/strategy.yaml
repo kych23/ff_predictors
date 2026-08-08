@@ -8,7 +8,11 @@
 requires_league_hash: "PENDING" # set once league.v2.yaml stabilizes
 
 payout:
-  buy_in: 32
+  # DERIVED, not chosen: the loader requires sum(prizes) == buy_in * teams, and
+  # 260 + 40 + 14*9 = 426 over 12 teams is 35.50. If the real buy-in is not
+  # 35.50, there is a prize here that is not written down — say so, because a
+  # missing prize is a missing term in the objective.
+  buy_in: 35.5
   currency: USD
   # Every prize is a rule compiled to a reducer. The sum of expected payouts
   # MUST equal buy_in * teams; the loader refuses to start otherwise, because a
@@ -22,12 +26,17 @@ payout:
     - id: champion
       type: final_rank
       rank: 1
-      amount: { dollars: 300 }
+      amount: { dollars: 260 }
+      ties: split
+    - id: runner_up
+      type: final_rank
+      rank: 2
+      amount: { dollars: 40 }
       ties: split
     - id: weekly_high
       type: weekly_high_score
       weeks: { from: 1, to: 14 } # inclusive both ends
-      amount: { dollars: 6 } # per qualifying week
+      amount: { dollars: 9 } # per qualifying week
       ties: split
 
 adp:
@@ -45,6 +54,17 @@ roster_preferences:
   # Caps every policy's roster-legality filter (§14.1), not just tier-2 VONA.
   # K and DST are capped so a softmax bot cannot draft six kickers late.
   max_per_position: { QB: 2, TE: 2, K: 1, DST: 1 }
+
+  # Tighter caps that expire. `max_per_position` says what a roster may ever
+  # hold; these say how early is too early for the second one.
+  #
+  # TE: exactly one starting slot, and a second tight end can only reach the
+  # lineup through FLEX — where he competes with every RB and WR on the board.
+  # The objective already prices that thinly, but "thinly" is not "never", and
+  # a high-variance TE2 can still win a shortlist slot in round 5 off upside
+  # alone. Through round 8 the answer is simply no.
+  early_round_caps:
+    TE: { max: 1, through_round: 8 }
 
 yahoo:
   league_key: null # discovered by scripts/spikes/probe_yahoo.py

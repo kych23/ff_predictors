@@ -487,3 +487,170 @@ def test_directional_margins_exceed_the_gate_tolerance(record):
     text = assemble([Clause("he leads", "champion", "dollars", "gt")], tiny,
                     TOL)
     assert gate(text, tiny, tolerances=TOL).ok
+
+
+# ------------------------------------------------- football facts (§18)
+def _facts_record():
+    return AttributionRecord(
+        pair=("p1", "p2"),
+        delta_by_prize={"champion": 2.0, "weekly_high": 0.4},
+        delta_weeks=[(1, 0.5)], roster_slot_affected="RB",
+        aleatory_se=1.5, epistemic_se=1.2,
+        survival_probabilities={"p1": 0.2},
+        names={"p1": "Breece Hall", "p2": "Sam LaPorta"},
+        player_facts={"p1": {"games": 15.234, "consistency": 5.1, "adp": 12.0},
+                      "p2": {"games": 13.4}})
+
+
+def test_a_football_fact_resolves_to_its_number():
+    rec = _facts_record()
+    assert rec.fact_for("Breece Hall games") == pytest.approx(15.234)
+    assert rec.fact_for("Sam LaPorta games") == pytest.approx(13.4)
+    assert rec.fact_for("Breece Hall targets") is None
+
+
+def test_facts_become_selectable_subjects():
+    """The model can only cite what the enum offers — a prompt line alone
+    cannot make it talk football."""
+    from src.app.narration.backends import allowed_subjects
+
+    subjects = allowed_subjects(_facts_record())
+    assert "Breece Hall games" in subjects["player_fact"]
+    assert "Breece Hall consistency" in subjects["player_fact"]
+
+
+@pytest.mark.parametrize("comparator", ["approx", "gt", "lt"])
+def test_a_fact_claim_passes_its_own_gate(comparator):
+    from src.app.narration.backends import Clause
+    from src.app.narration.render import NarrationConfig, assemble
+    from src.app.narration.verify import gate
+
+    rec, cfg = _facts_record(), NarrationConfig()
+    tagged = assemble([Clause(text="Breece Hall stays on the field",
+                              subject="Breece Hall games",
+                              quantity="player_fact", comparator=comparator)],
+                      rec, cfg.tolerances)
+    assert gate(tagged, rec, tolerances=cfg.tolerances).ok
+
+
+def test_facts_render_in_their_own_units_not_dollars():
+    """A durability claim printed as dollars is the right subject wearing the
+    wrong unit — observed: 'steadier week to week less than $0.82'."""
+    from src.app.narration.backends import Clause
+    from src.app.narration.render import NarrationConfig, _readable, assemble
+
+    rec, cfg = _facts_record(), NarrationConfig()
+    for subject, unit in (("Breece Hall games", "games"),
+                          ("Breece Hall consistency", "pts/wk"),
+                          ("Breece Hall adp", "ADP")):
+        text = _readable(assemble(
+            [Clause(text="x", subject=subject, quantity="player_fact",
+                    comparator="approx")], rec, cfg.tolerances))
+        assert unit in text and "$" not in text
+
+
+def test_player_fact_is_a_recognised_quantity():
+    """The gate refuses any quantity without an entailment rule, so adding the
+    subject without adding the kind silently rejected every fact claim."""
+    from src.app.narration.attribution import QUANTITIES
+
+    assert "player_fact" in QUANTITIES
+
+
+def test_partial_tolerances_do_not_wipe_the_defaults():
+    """A config naming only `dollars` used to zero every other tolerance, and a
+    zero tolerance turns `approx` into exact float equality — so the narration
+    failed the gate on rounding alone."""
+    from types import SimpleNamespace
+
+    from src.app.narration.render import NarrationConfig
+
+    strategy = SimpleNamespace(simulation=SimpleNamespace(
+        narration={"tolerances": {"dollars": 0.5}}))
+    tol = NarrationConfig.from_strategy(strategy).tolerances
+    assert tol["dollars"] == 0.5
+    assert tol["player_fact"] == pytest.approx(0.05)
+    assert tol["probability"] == pytest.approx(0.02)
+
+
+def test_football_guidance_is_absent_when_there_are_no_facts():
+    """Without facts the enum offers only money, and pushing a football framing
+    produces football words bolted to a dollar figure — measured live as
+    'both are durable $2.24'."""
+    from src.app.narration.backends import system_prompt
+
+    bare = AttributionRecord(
+        pair=("p1", "p2"), delta_by_prize={"champion": 2.0},
+        delta_weeks=[(1, 0.5)], roster_slot_affected="RB",
+        aleatory_se=1.0, epistemic_se=1.0, names={"p1": "A", "p2": "B"})
+    assert "durability" not in system_prompt(bare)
+    assert "durability" in system_prompt(_facts_record())
+
+
+def test_unverifiable_context_is_not_offered():
+    """Team changes, target share and depth-chart moves are absent BY DESIGN:
+    the bundle has a current team and no history, so the gate could never
+    check them."""
+    from src.app.narration.attribution import PLAYER_FACTS
+
+    assert set(PLAYER_FACTS) == {"games", "consistency", "adp"}
+
+
+# ------------------------------------------ text/subject coherence (§18)
+def _coh(text, subject, quantity):
+    from src.app.narration.verify import Claim, check_coherence
+
+    return check_coherence(text, Claim(subject=subject, quantity=quantity,
+                                       comparator="approx", value="0"))
+
+
+def test_a_football_sentence_may_not_carry_a_dollar_figure():
+    """Observed live: 'both are durable with expected games played less than
+    $2.20'. Every numeric check passed — $2.20 really was a prize delta — because
+    nothing compared the PROSE to the subject."""
+    assert _coh("both are durable with expected games played",
+                "champion", "dollars") is not None
+
+
+def test_a_durability_sentence_must_carry_a_games_number():
+    assert _coh("Breece Hall stays healthy", "Breece Hall games",
+                "player_fact") is None
+    assert _coh("Breece Hall stays healthy", "Breece Hall consistency",
+                "player_fact") is not None
+
+
+def test_a_consistency_sentence_must_carry_a_consistency_number():
+    assert _coh("steadier week to week", "Breece Hall consistency",
+                "player_fact") is None
+    assert _coh("steadier week to week", "Breece Hall games",
+                "player_fact") is not None
+
+
+@pytest.mark.parametrize("word", ["both", "neither", "each", "either"])
+def test_a_collective_word_cannot_carry_one_players_fact(word):
+    """The inserted number is one player's, so 'both are durable' asserts
+    something about a player it never measured."""
+    assert _coh(f"{word} are durable", "Breece Hall games",
+                "player_fact") is not None
+
+
+def test_a_collective_word_is_fine_on_a_prize_comparison():
+    """A prize delta IS a comparison of the two, so 'both' is correct there."""
+    assert _coh("both are close on the title", "champion", "dollars") is None
+
+
+def test_an_incoherent_clause_is_dropped_not_rendered():
+    """Drop the clause, keep the rest — failing the whole narration to the
+    table costs the good sentences too."""
+    from src.app.narration.backends import Clause
+    from src.app.narration.render import NarrationConfig, assemble
+
+    rec, cfg = _facts_record(), NarrationConfig()
+    text = assemble([
+        Clause(text="both are durable", subject="champion",
+               quantity="dollars", comparator="approx"),
+        Clause(text="Breece Hall edges the title", subject="champion",
+               quantity="dollars", comparator="approx"),
+    ], rec, cfg.tolerances)
+    assert "durable" not in text
+    assert "edges the title" in text

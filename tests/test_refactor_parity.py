@@ -56,6 +56,7 @@ def replayed(golden):
     from src.app.cockpit.ladder import recommend
     from src.core.config import load_league, load_strategy
     from src.engine.decision.board import Board
+    from src.models.artifacts import code_digest
 
     cfg = load_league()
     strategy = load_strategy(cfg)
@@ -64,6 +65,16 @@ def replayed(golden):
         pytest.skip(
             f"golden was built against {golden['snapshot_id']} but the bundle "
             f"is {board.snapshot_id}; regenerate the golden")
+    # Data identity is not enough. `snapshot_id` is a Merkle root over the
+    # SOURCE DATA, so changing feature or model code reprojects every player
+    # under an unchanged id. Without this second check the golden would go on
+    # comparing against numbers a different engine produced — and pass, which
+    # is the one outcome that makes a regression guard worse than none.
+    current = code_digest()
+    if golden.get("code_digest") not in (None, current):
+        pytest.skip(
+            f"golden was fitted by code {golden['code_digest']} but this tree "
+            f"is {current}; regenerate the golden")
 
     by_seat: dict[int, list[str]] = {}
     for i, pid in enumerate(golden["drafted"]):

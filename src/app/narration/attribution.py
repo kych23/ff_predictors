@@ -18,7 +18,21 @@ import numpy as np
 
 #: The quantity kinds a claim may carry. Fixed, because the gate needs one
 #: entailment rule per kind and an unknown kind has no rule.
-QUANTITIES = ("dollars", "probability", "week", "slot")
+#: `player_fact` covers the football facts below. The gate refuses any
+#: quantity not named here, which is why adding a new kind means adding
+#: an entailment rule for it rather than just a prompt line.
+QUANTITIES = ("dollars", "probability", "player_fact", "week", "slot")
+
+
+#: The fixed vocabulary of football facts a narration may cite. Each one is
+#: derivable from the board or a fitted model, so the gate can verify it.
+#:
+#: Deliberately ABSENT, and worth naming: team changes, target share, depth
+#: chart moves, holdouts, coaching changes. The bundle carries a player's
+#: CURRENT team and no history, so "moved to a new team" is not checkable —
+#: and an unverifiable clause is exactly what the gate exists to stop. Adding
+#: those means adding the data first, not loosening the prompt.
+PLAYER_FACTS = ("games", "consistency", "adp")
 
 
 @dataclass(frozen=True)
@@ -34,6 +48,13 @@ class AttributionRecord:
     survival_probabilities: dict[str, float] = field(default_factory=dict)
     bye_conflicts: list[int] = field(default_factory=list)
     names: dict[str, str] = field(default_factory=dict)
+    #: Verifiable football facts per player id, for the narration to reason
+    #: from. Keys are a fixed vocabulary — see `PLAYER_FACTS`. Everything here
+    #: comes off the board or the fitted models, so the gate can check it.
+    #: Anything NOT derivable that way (a trade, a holdout, a target share)
+    #: is deliberately absent: the model cannot cite what it cannot be
+    #: checked on, which is the whole reason the narration is trustworthy.
+    player_facts: dict[str, dict[str, float]] = field(default_factory=dict)
 
     @property
     def total_delta(self) -> float:
@@ -71,6 +92,21 @@ class AttributionRecord:
                 return float(p)
         return None
 
+    def fact_for(self, subject: str) -> float | None:
+        """`<player name> <fact>` -> the number, or None if not on record."""
+        key = subject.strip().lower()
+        for player, facts in self.player_facts.items():
+            display = self.display(player).lower()
+            for fact, value in facts.items():
+                if key in (f"{display} {fact}", f"{player.lower()} {fact}"):
+                    return float(value)
+        return None
+
+    def fact_subjects(self) -> list[str]:
+        return sorted(f"{self.display(p)} {fact}"
+                      for p, facts in self.player_facts.items()
+                      for fact in facts)
+
     def weeks(self) -> set[int]:
         return {int(w) for w, _ in self.delta_weeks} | set(self.bye_conflicts)
 
@@ -94,7 +130,9 @@ def build_record(leader: str, runner_up: str, *,
                  roster_slot_affected: str = "",
                  survival_probabilities: Mapping[str, float] | None = None,
                  bye_conflicts: list[int] | None = None,
-                 names: Mapping[str, str] | None = None) -> AttributionRecord:
+                 names: Mapping[str, str] | None = None,
+                 player_facts: Mapping[str, Mapping[str, float]] | None = None,
+                 ) -> AttributionRecord:
     """Assemble from two `decompose` outputs and their team-week tensors.
 
     `*_parts` map prize id -> (T, R) dollars, exactly what
@@ -124,4 +162,5 @@ def build_record(leader: str, runner_up: str, *,
         survival_probabilities=dict(survival_probabilities or {}),
         bye_conflicts=list(bye_conflicts or []),
         names=dict(names or {}),
+        player_facts={p: dict(f) for p, f in (player_facts or {}).items()},
     )

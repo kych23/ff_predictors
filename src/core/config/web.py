@@ -54,9 +54,13 @@ class WebConfig:
     replay_path: Path | None = None
     replay_auto_recommend: bool = False
     narration_timeout_seconds: float = 12.0
-    pick_clock_seconds: int = 90
+    pick_clock_seconds: int = 60
     session_path: Path = Path("data/web/session.json")
     ledger_path: Path = Path("data/web/ledger.sqlite")
+    #: Draft-order team names, seat 0 first. Short blanks fall back to
+    #: "Team N" — a placeholder that looks like one beats a wrong name
+    #: that looks right.
+    team_names: tuple[str, ...] = ()
     engine: EngineConfig = field(default_factory=EngineConfig)
     yahoo: YahooWebConfig = field(default_factory=YahooWebConfig)
 
@@ -114,9 +118,10 @@ def load_web(path: Path | None = None) -> WebConfig:
         replay_auto_recommend=bool(raw.get("replay_auto_recommend", False)),
         narration_timeout_seconds=float(
             raw.get("narration_timeout_seconds", 12.0)),
-        pick_clock_seconds=int(raw.get("pick_clock_seconds", 90)),
+        pick_clock_seconds=int(raw.get("pick_clock_seconds", 60)),
         session_path=Path(raw.get("session_path", "data/web/session.json")),
         ledger_path=Path(raw.get("ledger_path", "data/web/ledger.sqlite")),
+        team_names=tuple(str(n) for n in (raw.get('team_names') or [])),
         engine=EngineConfig(reps=reps, budget_seconds=budget),
         yahoo=YahooWebConfig(
             token_path=Path(yahoo_raw.get("token_path", ".yahoo_token.json"))),

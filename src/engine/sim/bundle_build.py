@@ -34,7 +34,9 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 
+from src.core.constants import REPLACEMENT_FLOOR_QUANTILE
 from src.engine.sim.draws import ProjectionBundle
+from src.models.artifacts import newest
 from src.models.correlation.slot_matrix import DEFAULT_SLOTS, from_prior
 from src.models.weekly.hazard import HazardModel, player_covariates
 from src.models.weekly.variance import WeeklySigmaModel
@@ -60,8 +62,73 @@ class CovariateLoader(Protocol):
 
 
 def _latest(pattern: str, artifacts_dir: Path):
-    hits = sorted(Path(artifacts_dir).glob(pattern))
-    return hits[-1] if hits else None
+    return newest(pattern, root=Path(artifacts_dir))
+
+
+#: Fallback half-width when a row has no calibrated band, as a multiple of the
+#: player's own season rate. Chosen to match the median relative width of the
+#: calibrated bands on the shipped bundle rather than picked by feel.
+_FALLBACK_REL_HALF_WIDTH = 0.45
+
+
+def _rate_band(df: pd.DataFrame, value: np.ndarray,
+               sigma: np.ndarray) -> tuple[np.ndarray, np.ndarray, str]:
+    """The season-rate interval the split-normal draws from.
+
+    **This used to be synthesized and it was the wrong quantity.** The old line
+    was ``value +/- 1.28 * sigma_weekly / sqrt(17)``, which is the standard
+    error of a season MEAN under weekly sampling noise — how precisely we could
+    measure this player's average if the rate were known. What the draw needs
+    is the model's uncertainty about the rate itself, and the quantile model
+    fits exactly that and calibrates it conformally. `build_bundle` renamed
+    ``p50 -> value`` and dropped ``p10``/``p90``, so the calibrated band never
+    reached the simulator at all.
+
+    Measured over the 206 matched players on the live bundle:
+
+    * median calibrated width 8.817 pts/g against 4.069 synthesized — the
+      simulator's rate uncertainty was **2.30x too narrow**;
+    * calibrated skew ``(p90-p50)-(p50-p10)`` spans -5.24 to +5.86 and exceeds
+      0.5 in magnitude for **88.3%** of players, while the synthesized band is
+      symmetric to 1.8e-15 for every one. `split_normal_ppf` therefore
+      degenerated to a plain normal on every draw, discarding the asymmetry
+      that is the entire reason for a split normal.
+
+    Rows with no calibrated band — K/DST, and anyone `fill_unvalued` floored —
+    keep a synthesized one, but scaled off the player's own rate rather than
+    off weekly sigma, so it is at least the right order of magnitude.
+    """
+    have = ("value_p10" in df.columns and "value_p90" in df.columns)
+    if have:
+        p10 = pd.to_numeric(df["value_p10"], errors="coerce").to_numpy(dtype=float)
+        p90 = pd.to_numeric(df["value_p90"], errors="coerce").to_numpy(dtype=float)
+    else:
+        p10 = np.full(len(df), np.nan)
+        p90 = np.full(len(df), np.nan)
+
+    usable = np.isfinite(p10) & np.isfinite(p90) & (p90 > p10)
+    fallback_half = _FALLBACK_REL_HALF_WIDTH * np.abs(value)
+    p10 = np.where(usable, p10, value - fallback_half)
+    p90 = np.where(usable, p90, value + fallback_half)
+
+    # The band must bracket the median it is a band AROUND. A row whose p50 was
+    # replaced downstream — K/DST taking their fitted mean, or a floored
+    # rookie — can otherwise end up with p50 outside [p10, p90], which
+    # `split_normal_ppf` cannot represent.
+    p10 = np.minimum(p10, value)
+    p90 = np.maximum(p90, value)
+    # Non-negativity NEVER at the expense of ordering. Clamping to zero last
+    # can push p10 above a negative `value`: a [-5, -1] band around
+    # ``value = -2`` came out ``p10 = 0 > p50 = -2``, which `split_normal_ppf`
+    # cannot represent. Unreachable from the one production caller — the floor
+    # loop above makes every `value` positive first — but the invariant is
+    # this function's own, so it holds it itself rather than by arrangement.
+    p10 = np.minimum(np.maximum(p10, 0.0), value)
+
+    n = int(usable.sum())
+    source = (f"calibrated for {n}/{len(df)} rows, "
+              f"rate-scaled fallback for {len(df) - n}")
+    return p10, p90, source
 
 
 def nflverse_covariates(player_ids: pd.Series, positions: pd.Series,
@@ -121,12 +188,51 @@ def hazard_matrix(board: pd.DataFrame, cfg, weeks: int, season: int, *,
     return mat, f"fitted ({path.name}), range {mat.min():.3f}-{mat.max():.3f}"
 
 
+#: Memo for `build_projection_bundle`, keyed on everything that can change it.
+#: Bounded to one entry: a draft uses a single board, and holding the previous
+#: one would double the memory for no hit rate.
+_BUNDLE_CACHE: dict[tuple, ProjectionBundle] = {}
+
+
+def clear_bundle_cache() -> None:
+    """Drop the memo. Used by tests and whenever the board is rebuilt."""
+    _BUNDLE_CACHE.clear()
+
+
 def build_projection_bundle(board: pd.DataFrame, cfg, weeks: int,
                             season: int = 2026, *,
                             covariate_loader: CovariateLoader = nflverse_covariates,
                             artifacts_dir: Path = ARTIFACTS
                             ) -> ProjectionBundle:
-    """Map the draft board onto the simulator's array contract."""
+    """Map the draft board onto the simulator's array contract.
+
+    **Memoized, and that is not an optimization — it is the difference between
+    a usable pick clock and an unusable one.** `hazard_matrix` calls
+    `nflverse_covariates`, which opens the network, and tier 0 rebuilt this on
+    every recommendation. Measured on the live board: **61.85 s**, against a
+    25 s allocator budget. The deadline was therefore already blown before the
+    first candidate was evaluated — the allocator got 0.18 s, returned
+    `stopped_because="deadline"`, and the recommendation came from the two
+    initial draws per candidate rather than the fifty it is budgeted for.
+    A 60-second wait bought almost no simulation.
+
+    The inputs genuinely do not change during a draft. Tier 0 passes the FULL
+    board, not the available subset, precisely so that players already drafted
+    still contribute to their team's weekly totals — so the frame is identical
+    at pick 1 and pick 180. The key covers the board identity, its size, the
+    horizon and the loader, so a different board or a stubbed loader still
+    rebuilds.
+    """
+    key = (
+        id(covariate_loader), str(artifacts_dir), int(weeks), int(season),
+        len(board),
+        # Board contents, not just length: a resolved name can change a row
+        # in place without changing the row count.
+        hash(tuple(board["player_id"].astype(str))),
+    )
+    cached = _BUNDLE_CACHE.get(key)
+    if cached is not None:
+        return cached
     sigma_path = _latest("weekly_sigma_*.json", artifacts_dir)
     if sigma_path is None:
         raise FileNotFoundError(
@@ -184,9 +290,12 @@ def build_projection_bundle(board: pd.DataFrame, cfg, weeks: int,
         valued = value[at_pos & (value > 0)]
         if valued.size == 0:
             continue
-        floor = float(np.quantile(valued, 0.10))
+        floor = float(np.quantile(valued, REPLACEMENT_FLOOR_QUANTILE))
         missing = at_pos & (value <= 0)
         value[missing] = floor
+
+    rate_p10, rate_p90, band_source = _rate_band(df, value, sigma)
+    print(f"      rate band: {band_source}")
 
     # BOTH seams forwarded. `build_tiers` never calls `hazard_matrix` directly,
     # so omitting them here would leave a stubbed loader silently bypassed.
@@ -195,7 +304,7 @@ def build_projection_bundle(board: pd.DataFrame, cfg, weeks: int,
         covariate_loader=covariate_loader, artifacts_dir=artifacts_dir)
     print(f"      hazard: {hazard_source}")
 
-    return ProjectionBundle(
+    bundle = ProjectionBundle(
         player_ids=df["player_id"].to_numpy(),
         positions=df["position"].to_numpy(),
         nfl_teams=df["team"].fillna("FA").to_numpy(),
@@ -203,13 +312,16 @@ def build_projection_bundle(board: pd.DataFrame, cfg, weeks: int,
         bye_weeks=pd.to_numeric(df["bye_week"], errors="coerce").fillna(0)
                     .astype(int).to_numpy(),
         is_kdst=is_kdst,
-        rate_p10=np.maximum(value - 1.28 * sigma / np.sqrt(17), 0.0),
+        rate_p10=rate_p10,
         rate_p50=value,
-        rate_p90=value + 1.28 * sigma / np.sqrt(17),
+        rate_p90=rate_p90,
         weekly_sigma=sigma,
         games_hazard=hazard,
         kdst_quantiles=kdst_q,
     )
+    _BUNDLE_CACHE.clear()          # one entry only
+    _BUNDLE_CACHE[key] = bundle
+    return bundle
 
 
 def draft_rosters(board: pd.DataFrame, cfg, rng) -> list[np.ndarray]:
@@ -242,10 +354,10 @@ def load_posterior(*, artifacts_dir: Path = ARTIFACTS):
     """
     from src.models.correlation import slot_matrix as sm
 
-    hits = sorted(Path(artifacts_dir).glob("correlation_posterior_*.npz"))
-    if not hits:
+    hit = _latest("correlation_posterior_*.npz", Path(artifacts_dir))
+    if hit is None:
         return None
-    with np.load(hits[-1], allow_pickle=False) as data:
+    with np.load(hit, allow_pickle=False) as data:
         slots = tuple(json.loads(str(data["slots"])))
         mats = data["matrices"]
     draws = tuple(

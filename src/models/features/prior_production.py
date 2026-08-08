@@ -186,11 +186,37 @@ def build_prior_production(
     feats = [c for c in RATE_FEATURES if c in agg.columns]
 
     def _ewma_last(group: pd.DataFrame) -> pd.Series:
-        # halflife in seasons; ewm over the ordered season series, take final value.
-        ewm = group[feats].ewm(halflife=halflife).mean()
-        out = ewm.iloc[-1]
+        """Decay each rate by SEASON DISTANCE, not by row position.
+
+        `DataFrame.ewm(halflife=h)` without `times=` weights the i-th row back
+        as ``0.5 ** (i / h)`` — i counts ROWS. For a player who has played
+        every year those are the same thing, which is why this read correctly
+        for so long. For a player who missed a season they are not: with
+        seasons 2019, 2020, 2024, the 2019 row is one row further back and so
+        gets weight 0.25, when five seasons of distance earn it 0.031. Measured
+        on that history the feature came out 10.0 instead of 6.0.
+
+        **18.7% of multi-season players in 2011-2025 have a gap** (median 2
+        seasons, up to 6), and they are exactly the cohort the gap distorts
+        most: players returning from a lost year to injury, suspension or a
+        spell out of the league, whose stale pre-gap production gets carried
+        forward as though it were recent.
+
+        Weighting on `max(season) - season` reduces to the pandas formula
+        exactly when seasons are contiguous, so the 81% without a gap are
+        unaffected. NaNs renormalize per column, matching `ewm`'s skipna.
+        """
+        seasons = pd.to_numeric(group["season"], errors="coerce")
+        weight = 0.5 ** ((seasons.max() - seasons) / halflife)
+
+        values = group[feats]
+        present = values.notna()
+        numerator = values.fillna(0.0).mul(weight, axis=0).sum()
+        denominator = present.mul(weight, axis=0).sum()
+        out = numerator / denominator.replace(0, np.nan)
+
         out["seasons_of_history"] = group["season"].nunique()
-        out["last_season"] = int(group["season"].max())
+        out["last_season"] = int(seasons.max())
         return out
 
     rolled = agg.groupby("player_id", group_keys=True).apply(_ewma_last, include_groups=False)

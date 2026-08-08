@@ -29,6 +29,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.core.errors import DataError
+
 GENESIS_HASH = "0" * 64
 
 #: Fields covered by the hash, in this order. Adding a field here breaks every
@@ -180,6 +182,51 @@ class DecisionLedger:
         row = self._conn.execute(
             "SELECT * FROM decision_ledger ORDER BY id DESC LIMIT 1").fetchone()
         return self._row_to_entry(row) if row else None
+
+    def sessions(self) -> list[dict[str, Any]]:
+        """One row per draft in the ledger, newest first."""
+        rows = self._conn.execute(
+            "SELECT session_id, COUNT(*) AS entries, MIN(created_at) AS first,"
+            " MAX(created_at) AS last, MAX(id) AS max_id"
+            " FROM decision_ledger GROUP BY session_id ORDER BY max_id DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_session(self, session_id: str) -> int:
+        """Erase one draft's entries. Returns how many were removed.
+
+        **Refuses anything but the tail of the chain**, and the refusal is the
+        point. Every entry stores the hash of the one before it, so removing
+        entries from the middle leaves everything after them claiming a
+        `prev_hash` that no longer exists — `verify()` would report the file as
+        tampered, which is indistinguishable from someone actually tampering
+        with it. A delete that silently destroys the ledger's one guarantee is
+        worse than a delete that refuses.
+
+        Deleting the most recent draft IS safe: its entries are a contiguous
+        suffix, so what remains is still a valid chain from genesis. That is
+        the case the UI's delete button exercises, since you can only clear the
+        draft you are in.
+        """
+        rows = self._conn.execute(
+            "SELECT id FROM decision_ledger WHERE session_id = ? ORDER BY id",
+            (session_id,)).fetchall()
+        if not rows:
+            return 0
+        ids = [int(r["id"]) for r in rows]
+        tail = [int(r["id"]) for r in self._conn.execute(
+            "SELECT id FROM decision_ledger ORDER BY id DESC LIMIT ?",
+            (len(ids),)).fetchall()]
+        if sorted(tail) != ids:
+            raise DataError(
+                f"session {session_id} is not the newest in the ledger; "
+                f"deleting it would break the hash chain for every entry "
+                f"after it. Archive the draft instead."
+            )
+        self._conn.execute(
+            "DELETE FROM decision_ledger WHERE session_id = ?", (session_id,))
+        self._conn.commit()
+        return len(ids)
 
     # ---------------------------------------------------------- verifying
     def verify(self) -> ChainVerification:

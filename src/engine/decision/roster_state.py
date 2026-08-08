@@ -36,7 +36,9 @@ def my_pick_sequence(draft_position: int, n_teams: int, rounds: int) -> list[int
 class RosterState:
     cfg: LeagueConfig
     draft_position: int
-    my_roster: list[dict] = field(default_factory=list)   # {player_id, position}
+    #: {player_id, position} required; {team, bye_week} optional and used only
+    #: by the narration layer, never by scoring.
+    my_roster: list[dict] = field(default_factory=list)
     drafted: set = field(default_factory=set)             # all drafted player_ids (any team)
     slot_fill: dict[str, int] = field(default_factory=dict)
     #: Picks made whose player could not be identified. They never enter
@@ -85,13 +87,21 @@ class RosterState:
                                    "team": team, "bye_week": bye_week})
             self._assign_slot(position)
 
-    def my_rb_teams(self) -> set:
-        """Teams of RBs I've drafted — for handcuff detection."""
-        return {p["team"] for p in self.my_roster
-                if p.get("position") == "RB" and p.get("team")}
+    # There is deliberately no handcuff helper here. `my_rb_teams()` used to
+    # sit at this spot, unused, labelled "for handcuff detection" — a comment
+    # promising logic that was never built. Handcuff value is already priced:
+    # the fitted slot matrix carries RB1 x RB2 at -0.139 (see
+    # models/correlation/slot_matrix.py), so a same-team back pair genuinely
+    # reduces the variance of my weekly RB total inside the simulation. An
+    # explicit handcuff bonus on top of that would double-count it.
 
     def my_bye_week_counts(self) -> dict:
-        """Bye week -> count of my drafted players on that bye."""
+        """Bye week -> count of my drafted players on that bye.
+
+        Explanation only. Byes reach the objective through
+        `sim.kernel.starter_values`, which zeroes a player in his bye week off
+        the bundle, so nothing here needs to feed scoring.
+        """
         counts: dict = {}
         for p in self.my_roster:
             bw = p.get("bye_week")

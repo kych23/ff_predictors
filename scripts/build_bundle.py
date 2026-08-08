@@ -24,8 +24,10 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.config import load_league, load_strategy  # noqa: E402
+from src.core.constants import REPLACEMENT_FLOOR_QUANTILE  # noqa: E402
 from src.domain.scoring.engine import score_offense  # noqa: E402
 from src.engine.decision.tiers import build_tier_table, write_tiers  # noqa: E402
+from src.models.artifacts import newest, newest_all  # noqa: E402
 from src.platform import bundle as bundle_mod  # noqa: E402
 from src.platform.identity.match import match_by_name  # noqa: E402
 from src.platform.sources import ffc, nflverse  # noqa: E402
@@ -46,8 +48,7 @@ def load_projections(season: int) -> tuple[pd.DataFrame, str] | tuple[None, None
     build order's hard rule (§22.1).
     """
     art = Path("data/artifacts")
-    metas = sorted(art.glob("projections_*.meta.json"))
-    for meta_path in reversed(metas):
+    for meta_path in newest_all("projections_*.meta.json", root=art):
         meta = json.loads(meta_path.read_text())
         if int(meta.get("target_season", -1)) != season:
             continue
@@ -80,17 +81,15 @@ def prior_season_value(season: int, league, entries: list) -> pd.DataFrame:
 
 ARTIFACTS = Path("data/artifacts")
 
-#: Quantile of the *valued* players at a position used as the stand-in for a
-#: player the identity join could not value. Low enough that any real
-#: projection outranks it, positive enough to be draftable at all.
-REPLACEMENT_QUANTILE = 0.10
+#: Re-exported from core so the board and the simulator fill the same hole with
+#: the same number. `engine.sim.bundle_build` computes this floor too, and a
+#: second literal here meant two answers to one question.
+REPLACEMENT_QUANTILE = REPLACEMENT_FLOOR_QUANTILE
 
 
 def _latest_kdst() -> dict | None:
-    hits = sorted(ARTIFACTS.glob("kdst_*.json"))
-    if not hits:
-        return None
-    return json.loads(hits[-1].read_text())["distributions"]
+    hit = newest("kdst_*.json", root=ARTIFACTS)
+    return json.loads(hit.read_text())["distributions"] if hit else None
 
 
 def fill_unvalued(frame: pd.DataFrame) -> pd.DataFrame:
@@ -162,6 +161,18 @@ def fill_unvalued(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _optional(src: pd.DataFrame, column: str) -> pd.Series:
+    """A numeric column if the frame has one, otherwise all-NaN.
+
+    The prior-season fallback path carries no calibrated quantiles, and neither
+    do K/DST. NaN is the honest encoding — `bundle_build` falls back per row
+    rather than inventing a band for players the quantile model never covered.
+    """
+    if column not in src.columns:
+        return pd.Series(np.nan, index=src.index, dtype="float64")
+    return pd.to_numeric(src[column], errors="coerce")
+
+
 def build(season: int, out: Path) -> bundle_mod.Bundle:
     league = load_league()
     strategy = load_strategy(league)
@@ -173,12 +184,31 @@ def build(season: int, out: Path) -> bundle_mod.Bundle:
         nfl_names = prior_season_value(season, league, entries)[
             ["player_id", "nfl_name"]].drop_duplicates("player_id")
         values = projections.merge(nfl_names, on="player_id", how="left")
-        # rookies have no prior-season row and therefore no name from that
-        # source; fall back to the players table via the projection index
         values = values.rename(columns={"p50": "value"})
+
+        # ROSTER TABLE FALLBACK. The name is needed only to string-match the
+        # FFC ADP list; it says nothing about whether a projection is valid.
+        # Taking it solely from prior-season stats meant every ROOKIE — who by
+        # definition has no prior-season row — was dropped here and reappeared
+        # as unmatched at value 0.0, then floored at replacement. The model had
+        # projected all 231 of them. The comment that used to sit here
+        # described this fallback; the code did `dropna` instead.
+        roster_pull = nflverse.fetch("players")
+        entries.append(roster_pull.entry)
+        roster_names = (roster_pull.frame[["gsis_id", "display_name"]]
+                        .dropna(subset=["gsis_id"])
+                        .rename(columns={"gsis_id": "player_id",
+                                         "display_name": "roster_name"})
+                        .drop_duplicates("player_id"))
+        roster_names["player_id"] = roster_names["player_id"].astype(str)
+        values["player_id"] = values["player_id"].astype(str)
+        values = values.merge(roster_names, on="player_id", how="left")
+        values["nfl_name"] = values["nfl_name"].fillna(values["roster_name"])
+        values = values.drop(columns=["roster_name"])
         values = values.dropna(subset=["nfl_name"])
         value_source = "quantile_model"
-        print(f"      {len(values)} players with calibrated P10/P50/P90")
+        print(f"      {len(values)} players with calibrated P10/P50/P90 "
+              f"(names: prior season + roster fallback)")
     else:
         print(f"[1/4] prior-season value ({season - 1}) through league scoring...")
         values = prior_season_value(season, league, entries)
@@ -233,6 +263,13 @@ def build(season: int, out: Path) -> bundle_mod.Bundle:
             "bye_week": pd.to_numeric(src.get("bye"), errors="coerce"),
             "value": (pd.to_numeric(src["value"], errors="coerce").fillna(0.0)
                       if matched else 0.0),
+            # The CALIBRATED band, carried through rather than reconstructed.
+            # `bundle_build` used to synthesize one from weekly sigma, which is
+            # sampling noise about a season mean and not the model's
+            # uncertainty about the rate at all. NaN here means "no calibrated
+            # band" (K/DST, unmatched rows) and the consumer falls back.
+            "value_p10": _optional(src, "p10") if matched else np.nan,
+            "value_p90": _optional(src, "p90") if matched else np.nan,
             "value_source": value_source if matched else "none",
             "coverage": "full" if matched else "no_prior_season",
             "adp": pd.to_numeric(src["adp"], errors="coerce"),

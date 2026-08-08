@@ -21,6 +21,7 @@ model. §19's offline requirement is a property of the imports, not a promise.
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -108,10 +109,18 @@ class Session:
     """Append-only event log plus the state it replays to."""
 
     def __init__(self, *, my_seat: int, teams: int, rounds: int,
-                 snapshot_id: str = "", path: Path | None = None) -> None:
+                 snapshot_id: str = "", path: Path | None = None,
+                 session_id: str = "", started_at: str = "") -> None:
         if not 0 <= my_seat < teams:
             raise ValueError(
                 f"seat {my_seat} is outside a {teams}-team league (0-indexed)")
+        #: Identifies THIS draft. Distinct from `snapshot_id`, which identifies
+        #: the bundle and is shared by every draft run against it — the ledger
+        #: was being keyed on the snapshot, so two drafts on the same bundle
+        #: were indistinguishable in the record and deleting one would take
+        #: the other with it.
+        self.session_id = session_id or uuid.uuid4().hex[:12]
+        self.started_at = started_at or _now()
         self.my_seat = my_seat
         self.teams = teams
         self.rounds = rounds
@@ -242,6 +251,7 @@ class Session:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
+            "session_id": self.session_id, "started_at": self.started_at,
             "my_seat": self.my_seat, "teams": self.teams,
             "rounds": self.rounds, "snapshot_id": self.snapshot_id,
             "events": [e.to_dict() for e in self.events],
@@ -258,7 +268,11 @@ class Session:
         raw = json.loads(path.read_text())
         session = cls(my_seat=int(raw["my_seat"]), teams=int(raw["teams"]),
                       rounds=int(raw["rounds"]),
-                      snapshot_id=str(raw.get("snapshot_id", "")), path=path)
+                      snapshot_id=str(raw.get("snapshot_id", "")), path=path,
+                      # Logs written before session_id existed get one on load
+                      # so a resumed old draft still has a stable identity.
+                      session_id=str(raw.get("session_id", "")),
+                      started_at=str(raw.get("started_at", "")))
         session.events = [Event.from_dict(e) for e in raw.get("events", [])]
         session.state = session._replay()
         return session

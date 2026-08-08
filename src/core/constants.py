@@ -68,3 +68,24 @@ CALIBRATION_BUCKETS: Final = (
 #: Φ⁻¹(0.9). Used by the split-normal quantile match (§15.2) and by anything
 #: converting a P10/P90 pair into a scale parameter.
 Z90: Final = 1.2815515655446004
+
+#: Φ⁻¹(0.95) — the one-sided 90% critical value behind every separation and
+#: indifference test (§17.2).
+#:
+#: Centralized because it was written out three times: twice in
+#: `engine.decision.allocate` and once in `engine.decision.ladder_tiers`. The
+#: dollar half of the same test, `indifference_zone_dollars`, lives in
+#: strategy.yaml, so the confidence half sitting as a bare literal in three
+#: files meant half the rule was tunable and half was not — and a change to one
+#: copy would silently disagree with the others.
+SEPARATION_Z: Final = 1.6448536269514722
+
+#: Quantile of the VALUED players at a position used as the stand-in value for
+#: a player the identity join could not price (§19).
+#:
+#: Centralized because `scripts/build_bundle.py` and `engine.sim.bundle_build`
+#: each computed it independently. They fill the same hole — the board's value
+#: and the simulator's selection value for the same unvalued player — so two
+#: copies is two answers to one question, and a drift between them would make
+#: the board rank a rookie one way while the simulation started him another.
+REPLACEMENT_FLOOR_QUANTILE: Final = 0.10

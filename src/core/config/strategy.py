@@ -117,6 +117,18 @@ class StrategyConfig:
     def max_per_position(self) -> Mapping[str, int]:
         return self.roster_preferences.get("max_per_position", {})
 
+    @property
+    def early_round_caps(self) -> Mapping[str, Mapping[str, int]]:
+        """Position -> {max, through_round}: tighter caps for the early rounds.
+
+        Separate from `max_per_position` because they answer different
+        questions. That one is "how many of these can a roster ever hold";
+        this is "how early is it too early for a second one". A second tight
+        end is legal all draft and wrong in round 3, and one number cannot say
+        both.
+        """
+        return self.roster_preferences.get("early_round_caps", {})
+
 
 # --------------------------------------------------------------------------- #
 # prize parsing (§10.5 rules 9-13)
@@ -261,6 +273,16 @@ def load_strategy(league: LeagueConfig, path: str | None = None) -> StrategyConf
 
     adp_raw = raw["adp"]
     rounds = league.roster.rounds
+    # `adp.teams` selects which FFC market to pull. It is the SAME fact as
+    # `league.teams`, written in a second file, so an edit to one and not the
+    # other silently prices the draft against a different league's board —
+    # survival curves and every wait term with it. Omit the key to inherit.
+    if adp_raw.get("teams") is not None and int(adp_raw["teams"]) != league.teams:
+        raise ConfigError(
+            f"adp.teams ({adp_raw['teams']}) disagrees with league.teams "
+            f"({league.teams}); the ADP market must match the league being "
+            f"drafted. Remove adp.teams from strategy.yaml to inherit it."
+        )
     adp = AdpConfig(
         source=str(adp_raw["source"]),
         format=str(adp_raw["format"]),

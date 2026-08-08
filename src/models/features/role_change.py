@@ -27,6 +27,73 @@ import pandas as pd
 _VAC_COLS = {"targets": "targets", "carries": "carries", "air_yards": "receiving_air_yards"}
 
 
+#: nflverse renamed the depth-chart feed. Old -> new, so both parse.
+_DEPTH_RENAMES = {"pos_rank": "depth_team", "pos_abb": "position",
+                  "team": "club_code"}
+
+#: A depth chart published before this month-day is preseason for that season.
+_PRESEASON_CUTOFF = (9, 1)
+
+
+def normalize_depth_charts(depth: pd.DataFrame) -> pd.DataFrame:
+    """Adapt the nflverse depth-chart feed to the columns this module reads.
+
+    **The feed's schema changed and the features went silently to zero.** The
+    old shape carried ``season``, ``week``, ``club_code`` and ``depth_team``;
+    the current one carries ``dt``, ``team``, ``pos_abb`` and ``pos_rank`` and
+    NO season at all. Every lookup here returned NaN, so `depth_chart_rank`,
+    `is_projected_starter` and `same_position_competition` were absent for
+    every player — measured 93.6% populated in 2024, **0.0%** in 2025 and 2026.
+    Nothing failed; the model just stopped seeing role.
+
+    That block is the most direct evidence of opportunity the pipeline has, and
+    it matters most for the players with nothing else: a rookie has no prior
+    production by definition, so losing depth chart left him with draft capital
+    and vacated share alone.
+
+    `season` and `week` are DERIVED rather than dropped, because
+    `platform.asof.guards.preseason_rows` filters on them and silently passes
+    a frame through untouched when `season` is missing — which would let an
+    in-season depth chart reach a preseason feature. A chart published before
+    September 1 is week 1 for that season; anything later is in-season and the
+    guard drops it.
+    """
+    if depth is None or depth.empty:
+        return depth
+    out = depth.copy()
+    if "season" in out.columns:
+        return out                      # already the old shape; nothing to do
+
+    for old, new in _DEPTH_RENAMES.items():
+        if old in out.columns and new not in out.columns:
+            out[new] = out[old]
+
+    if "dt" in out.columns:
+        stamped = pd.to_datetime(out["dt"], errors="coerce", utc=True)
+        out["season"] = stamped.dt.year
+        before_kickoff = (
+            (stamped.dt.month < _PRESEASON_CUTOFF[0])
+            | ((stamped.dt.month == _PRESEASON_CUTOFF[0])
+               & (stamped.dt.day < _PRESEASON_CUTOFF[1]))
+        )
+        # 1 = preseason and admissible; 99 = in-season, which the as-of guard
+        # drops. Never NaN — `preseason_rows` treats NaN weeks as admissible.
+        out["week"] = np.where(before_kickoff, 1, 99)
+
+        # ONE SNAPSHOT PER TEAM, the newest still inside the as-of window.
+        # The feed is a time series — 140 distinct timestamps for 2026, so a
+        # player appears ~133 times — and `same_position_competition` counts
+        # teammates ranked ahead by ROW. Left unreduced it counted the same
+        # teammate once per snapshot and reported 609 players ahead of a
+        # starting cornerback.
+        out = out.sort_values("dt")
+        admissible = out[out["week"] == 1]
+        if not admissible.empty:
+            newest = admissible.groupby(["season", "club_code"])["dt"].transform("max")
+            out = admissible[admissible["dt"] == newest].copy()
+    return out
+
+
 def _depth_features(depth_y: pd.DataFrame) -> pd.DataFrame:
     """Per-player Week-1 depth rank, starter flag, same-position competition."""
     if depth_y is None or depth_y.empty:

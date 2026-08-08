@@ -36,8 +36,10 @@ from src.core.config.league import LeagueConfig, load_league
 from src.platform.asof import guards as lg
 
 from ._utils import json_safe as _json_safe
+from .college import build_college_features
+from .draft_capital import build_draft_capital
 from .prior_production import build_prior_production
-from .role_change import build_role_change
+from .role_change import build_role_change, normalize_depth_charts
 from .team_context import CTX_COLS, build_team_context
 
 logger = logging.getLogger(__name__)
@@ -110,7 +112,10 @@ def assemble_season(
     lg.assert_no_future(opp_prior, Y, where="prior_production opp")
 
     # --- preseason-Y artifacts ---
-    depth_all = frames.get("depth", pd.DataFrame())
+    # Normalize BEFORE the as-of guard. `preseason_rows` passes a frame
+    # through untouched when it has no `season` column, so the current
+    # nflverse schema would skip the leakage filter entirely.
+    depth_all = normalize_depth_charts(frames.get("depth", pd.DataFrame()))
     depth_y = lg.preseason_rows(depth_all, Y)
     rosters_all = frames.get("rosters", pd.DataFrame())
     rosters_y = rosters_all[pd.to_numeric(rosters_all.get("season"), errors="coerce") == Y] \
@@ -156,6 +161,23 @@ def assemble_season(
     # is_rookie
     df["is_rookie"] = df["player_id"].isin(set(rookie_ids))
 
+    # --- draft capital (preseason-Y artifact: the NFL draft is in April) ---
+    # The only feature that separates one rookie from another. Everything
+    # prior_* is null for them, so without this a first-round back and an
+    # undrafted back score nearly the same.
+    capital = build_draft_capital(frames.get("id_map", pd.DataFrame()),
+                                  df["player_id"])
+    df = df.merge(capital, on="player_id", how="left")
+
+    # --- college production (preseason-Y: a player's college career is over
+    # before he is drafted, so this cannot see the season being projected) ---
+    # Draft capital says what a team BELIEVES about a rookie; this is what he
+    # actually did. Deflated to a within-conference z-score, because raw totals
+    # reward the weakest schedule — see models/features/college.py.
+    college = build_college_features(frames.get("cfb_stats", pd.DataFrame()),
+                                     players, df["player_id"], Y)
+    df = df.merge(college, on="player_id", how="left")
+
     # position as-of Y: prefer roster position, else depth, else players table
     pos_map = {}
     if not rosters_y.empty:
@@ -193,7 +215,10 @@ def assemble_season(
     birth = dict(zip(p["player_id"], p.get("birth_date"), strict=False))
     df["age_at_season_start"] = df["player_id"].map(birth).map(lambda b: _age_at(b, as_of_date))
     df["season_length"] = _season_length(Y)
-    for flag in ["has_depth_data", "has_college_stats", "is_udfa", "has_combine"]:
+    # `has_college_stats` is no longer here: it is produced by
+    # `build_college_features` and forcing it to 0 alongside the genuinely
+    # unbuilt flags would zero a real feature.
+    for flag in ["has_depth_data", "is_udfa", "has_combine"]:
         if flag not in df.columns:
             df[flag] = 0
         df[flag] = pd.to_numeric(df[flag], errors="coerce").fillna(0).astype(int)

@@ -13,10 +13,30 @@ earlier revision did — makes the implied season-total interval about sqrt(17)
 too narrow and supplies no week-to-week variance at all.
 
 ``e`` is a unit-variance correlated shock from the empirical slot matrix, so
-conditional weekly variance is exactly ``sigma_w^2`` with no floor needed, and
-every pairwise same-team correlation is reproduced — including the ones no
-one-factor model can hold simultaneously (QB1-WR1 at 0.370 alongside WR1-WR2
-at 0.037).
+conditional weekly variance is exactly ``sigma_w^2``, and every pairwise
+same-team correlation is reproduced — including the ones no one-factor model
+can hold simultaneously (QB1-WR1 at 0.370 alongside WR1-WR2 at 0.037).
+
+**Known approximation: the weekly distribution is unbounded below.** A normal
+shock around a non-negative rate puts real mass on impossible scores. Measured
+on the shipped bundle over 300 replications, restricted to the top 24
+projected players at each position — the ones actually started:
+
+    QB  1.3% of weekly draws negative   RB  4.8%   WR  5.1%   TE  7.5%
+
+with a minimum of -24.65. In PPR a starting back cannot go below about -2;
+receptions and yardage are non-negative and only a lost fumble subtracts.
+
+This is left in place deliberately, and the reason is measured rather than
+assumed. Flooring the draws at zero and re-running a tier-0 recommendation
+moved individual candidates' E[$] by -1.50 to +3.18 but left BOTH the leader
+and the full ordering of the shortlist unchanged — the distortion is largely
+common across candidates and cancels in the difference, which is the only
+thing the decision reads (§5.1 already forbids reading the level as a
+measurement). Correcting it properly means refitting ``sigma_w`` under a
+bounded family, e.g. a shifted gamma matched to (mean=rate, sd=sigma), since
+simply truncating would bias every mean upward and break the calibration that
+makes ``rate`` the season points-per-game estimate.
 """
 from __future__ import annotations
 

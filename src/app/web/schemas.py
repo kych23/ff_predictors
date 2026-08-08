@@ -78,7 +78,15 @@ def _tier0_candidates(rec: Recommendation, lookup: dict) -> list[dict]:
             "vona_score": None,
             "in_indifference_set": pid in indifferent,
         })
-    out.sort(key=lambda c: (c["e_dollars"] is None, -(c["e_dollars"] or 0.0)))
+    # Leader first, then by DEPTH, then dollars. A two-draw estimate carries a
+    # standard error two to three times the leader's, so ranking it on its
+    # point estimate alone puts an arm the allocator dismissed at the top of
+    # the screen — the engine appearing to argue with itself.
+    leader = str(rec.leader) if rec.leader is not None else None
+    out.sort(key=lambda c: (c["player_id"] != leader,
+                            -(c["draws"] or 0),
+                            c["e_dollars"] is None,
+                            -(c["e_dollars"] or 0.0)))
     return out
 
 

@@ -30,7 +30,7 @@ def test_the_strategy_hash_is_pinned():
     rebuild the bundle and update the literal — or a transport setting leaked
     into the hashed config."""
     strategy = load_strategy(load_league())
-    assert strategy.strategy_hash == "ecc6ac2e9347", (
+    assert strategy.strategy_hash == "09e4cf71e67b", (
         f"strategy_hash moved to {strategy.strategy_hash}; every RNG seed and "
         f"the bundle's decision_version just changed")
 

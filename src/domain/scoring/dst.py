@@ -102,13 +102,26 @@ def implied_points(
 ) -> pd.Series:
     """Vegas-implied points for a team (§12.5, §6 team context).
 
-    ``total_line/2 - spread_line/2`` for the home team and
-    ``total_line/2 + spread_line/2`` for the away team, following nflverse's
-    convention that ``spread_line`` is signed from the home team's perspective
-    (negative = home favored).
+    ``total_line/2 + spread_line/2`` for the home team and
+    ``total_line/2 - spread_line/2`` for the away team.
+
+    **The sign was inverted here, and a test pinned the inversion.** nflverse
+    signs ``spread_line`` from the home perspective with POSITIVE meaning home
+    favored — measured over 1,408 completed games (2020-2024):
+    ``corr(spread_line, home margin) = +0.439``, and on the 333 games with
+    ``|spread| > 7`` the home team won 84.6% when the line was positive against
+    21.5% when negative. The old docstring asserted the opposite, and
+    `test_implied_points_sign_convention` asserted it too, so wrong code sat
+    behind a passing test.
+
+    This function had no production caller — `models.features._utils`
+    implements the same arithmetic correctly and is what the feature pipeline
+    uses — so no projection was affected. The duplication is the real defect:
+    two implementations of one formula with no shared source, and the wrong one
+    was the one with a test.
 
     Only Week-1 lines are preseason-available (§11.3), so this is a season-level
     team-strength proxy, not a per-week conditioner.
     """
     half_spread = spread_line / 2.0
-    return total_line / 2.0 - np.where(is_home, half_spread, -half_spread)
+    return total_line / 2.0 + np.where(is_home, half_spread, -half_spread)

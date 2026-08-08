@@ -1,4 +1,4 @@
-import { Wifi, WifiOff, AlertTriangle } from "lucide-react";
+import { AlertTriangle, LogOut, Wifi, WifiOff } from "lucide-react";
 import type { SessionState } from "../types";
 
 const CHIP: Record<string, { cls: string; Icon: typeof Wifi }> = {
@@ -7,7 +7,13 @@ const CHIP: Record<string, { cls: string; Icon: typeof Wifi }> = {
   failed: { cls: "text-red-400", Icon: WifiOff },
 };
 
-export function ClockStrip({ state }: { state: SessionState }) {
+export function ClockStrip({
+  state,
+  onExit,
+}: {
+  state: SessionState;
+  onExit: () => void;
+}) {
   const chip = CHIP[state.source.state] ?? CHIP.failed;
   const { Icon } = chip;
   return (
@@ -41,6 +47,16 @@ export function ClockStrip({ state }: { state: SessionState }) {
           <Icon size={14} aria-hidden="true" />
           {state.source.name}
         </span>
+
+        <button
+          type="button"
+          onClick={onExit}
+          title="Archive this draft and return to the start screen"
+          className="focusable flex cursor-pointer items-center gap-1.5 rounded border border-line px-2 py-1 text-muted transition-colors duration-200 hover:bg-bg hover:text-ink"
+        >
+          <LogOut size={13} aria-hidden="true" />
+          Exit draft
+        </button>
       </div>
     </header>
   );

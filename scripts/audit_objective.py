@@ -43,6 +43,7 @@ from src.engine.audit.backtest import (  # noqa: E402
 from src.engine.sim import kernel  # noqa: E402
 from src.engine.sim import rng as rng_mod
 from src.engine.sim.draws import ProjectionBundle, draw_points  # noqa: E402
+from src.models.artifacts import newest  # noqa: E402
 from src.models.correlation.slot_matrix import DEFAULT_SLOTS  # noqa: E402
 from src.models.weekly.hazard import HazardModel, player_covariates  # noqa: E402
 from src.models.weekly.variance import WeeklySigmaModel  # noqa: E402
@@ -55,8 +56,7 @@ MY_SEAT = 3
 
 
 def _latest(pattern: str):
-    hits = sorted(ARTIFACTS.glob(pattern))
-    return hits[-1] if hits else None
+    return newest(pattern, root=ARTIFACTS)
 
 
 def season_ppg(stats: pd.DataFrame, cfg) -> pd.DataFrame:

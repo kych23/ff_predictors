@@ -8,6 +8,7 @@ import pytest
 from src.core.config import load_league
 from src.core.errors import ArtifactSnapshotMismatch, DataError
 from src.models import artifacts
+from src.models.artifacts import newest
 from src.models.correlation.slot_matrix import (
     SlotCorrelation,
     fit_slot_correlation,
@@ -177,12 +178,12 @@ def test_prior_matches_the_fitted_matrix_on_real_data():
     import yaml
     prior = yaml.safe_load(Path("config/correlation_prior.yaml").read_text())
     fitted_path = Path("data/artifacts")
-    npz = sorted(fitted_path.glob("correlation_*.npz"))
-    if not npz:
+    npz = newest("correlation_*.npz", root=fitted_path)
+    if npz is None:
         pytest.skip("no fitted correlation artifact; run scripts/fit_models.py")
     corr = from_prior(prior)
     import json
-    with np.load(npz[-1], allow_pickle=False) as data:
+    with np.load(npz, allow_pickle=False) as data:
         meta = json.loads(str(data["meta"]))
         fitted = SlotCorrelation(
             slots=tuple(meta["slots"]), matrix=data["matrix"],

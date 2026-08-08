@@ -26,9 +26,34 @@ from src.domain.roster.lineup import greedy_lineup
 def selection_values(bundle, roster_idx: np.ndarray, week: int) -> np.ndarray:
     """Pre-week projection used to CHOOSE the lineup.
 
-    Availability and byes enter here rather than in the draw, so a player known
-    to be out is not started — while the *realized* points still come from the
-    drawn tensor.
+    Byes are exact here: a player on bye is worth zero this week and drops out
+    of the lineup, which is why the mask is week-dependent at all.
+
+    **Availability is only a probability, and that is a known limitation.**
+    This multiplies by ``games_hazard``, the fitted *chance* of playing, so a
+    70%-available starter is chosen on 70% of his rate. The drawn ``active``
+    indicator from `draws.draw_points` never reaches `build_masks`, so when a
+    replication draws him inactive he contributes an exact zero and no healthy
+    bench player is substituted. The docstring here used to claim "a player
+    known to be out is not started", which describes the intent rather than
+    the behaviour.
+
+    Measured on the shipped bundle (12 ADP-drafted rosters, 200 replications,
+    17 weeks): the fitted hazard averages 0.724 for skill players, and
+    **22.5% of chosen-starter player-weeks are drawn at exactly zero**. Mean
+    team-week comes out near 73 where letting the lineup see realized
+    availability gives about 85 — a systematic understatement of roughly 15%.
+
+    Fixing it is not cheap, which is the honest reason it stands. Availability
+    is knowable before kickoff, so selecting on it would NOT breach
+    non-clairvoyance (§15.3 forbids selecting on realized POINTS, not on who
+    is active). But the mask would become replication-dependent — (T, W, P, R)
+    rather than (T, W, P) — and computing it once per roster-week is precisely
+    what keeps this off the hot path inside a 60-second pick clock.
+
+    The bias is common across teams, so it largely cancels in rank-type
+    prizes. It does NOT cancel for bench depth, which is what the late rounds
+    are priced on, so this is the largest known fidelity gap in the objective.
     """
     values = bundle.rate_p50[roster_idx] * bundle.games_hazard[roster_idx, week]
     on_bye = bundle.bye_weeks[roster_idx] == week + 1

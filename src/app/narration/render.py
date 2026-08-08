@@ -25,9 +25,18 @@ from src.app.narration.attribution import AttributionRecord
 from src.app.narration.backends import (
     resolve_backend,
 )
-from src.app.narration.verify import GateResult, gate, strip_claims
+from src.app.narration.verify import (
+    Claim,
+    GateResult,
+    check_coherence,
+    gate,
+    strip_claims,
+)
 
 logger = logging.getLogger(__name__)
+
+#: Units for the football facts, so a durability claim does not print dollars.
+_FACT_UNITS = {"games": " games", "consistency": " pts/wk", "adp": " ADP"}
 
 
 
@@ -44,7 +53,13 @@ class NarrationConfig:
     #: §19 wants the recommendation path offline, not because local is better.
     backend: str = "auto"
     tolerances: Mapping[str, float] = field(
+        # `player_fact` needs a tolerance for the same reason `dollars` does:
+        # the claim is written at two decimals while the record holds full
+        # precision, so a zero tolerance makes every `approx` fact claim fail
+        # exact-equality and the narration falls back to the table. Measured:
+        # 7 of 20 records rejected on nothing but rounding.
         default_factory=lambda: {"dollars": 0.05, "probability": 0.02,
+                                 "player_fact": 0.05,
                                  "week": 0.0, "slot": 0.0})
 
     @classmethod
@@ -57,7 +72,13 @@ class NarrationConfig:
             gate_on_entailment=bool(raw.get("gate_on_entailment", True)),
             on_gate_fail=str(raw.get("on_gate_fail", "render_table")),
             backend=str(raw.get("backend", "auto")),
-            tolerances=dict(raw.get("tolerances", {})) or cls().tolerances,
+            # MERGED over the defaults, not substituted for them. A config that
+            # names only `dollars` used to silently zero every other tolerance,
+            # and a zero tolerance turns `approx` into exact float equality —
+            # so the whole narration fails the gate on rounding alone. It also
+            # means a new quantity works without editing strategy.yaml, which
+            # matters because that file is hashed into every RNG seed.
+            tolerances={**cls().tolerances, **dict(raw.get("tolerances", {}))},
         )
 
 
@@ -98,15 +119,28 @@ def assemble(clauses, record: AttributionRecord,
     """
     parts = []
     for clause in clauses:
-        actual = (record.dollars_for(clause.subject)
-                  if clause.quantity == "dollars"
-                  else record.probability_for(clause.subject))
+        if clause.quantity == "dollars":
+            actual = record.dollars_for(clause.subject)
+        elif clause.quantity == "player_fact":
+            actual = record.fact_for(clause.subject)
+        else:
+            actual = record.probability_for(clause.subject)
         if actual is None:
             logger.warning("dropping clause with unresolvable subject %r",
                            clause.subject)
             continue
         text = clause.text.strip().rstrip(".,;: ")
         if not text:
+            continue
+        # Text and subject are chosen independently, so the model can write a
+        # football sentence against a dollar figure and every numeric check
+        # still passes. Drop the clause rather than failing the whole
+        # narration — the other clauses are usually fine.
+        incoherent = check_coherence(
+            text, Claim(subject=clause.subject, quantity=clause.quantity,
+                        comparator=clause.comparator, value="0"))
+        if incoherent:
+            logger.warning("dropping incoherent clause: %s", incoherent)
             continue
         # A directional claim needs a threshold the record actually clears, or
         # `verify._entails` rejects it: `gt` requires `actual > claimed + tol`.
@@ -120,7 +154,7 @@ def assemble(clauses, record: AttributionRecord,
             value = actual - margin if clause.comparator == "gt" else actual + margin
         else:
             value = actual
-        digits = 2 if clause.quantity == "dollars" else 3
+        digits = 2 if clause.quantity in ("dollars", "player_fact") else 3
         parts.append(
             f'{text} <claim subject="{clause.subject}" '
             f'quantity="{clause.quantity}" comparator="{clause.comparator}" '
@@ -253,14 +287,30 @@ def _readable(text: str) -> str:
         except ValueError:
             return raw
         quantity = attrs.get("quantity", "")
+        subject = attrs.get("subject", "")
         comparator = attrs.get("comparator", "approx")
         if quantity == "dollars":
             shown = f"-${abs(value):.2f}" if value < 0 else f"${value:.2f}"
         elif quantity == "probability":
             shown = f"{value:.0%}"
+        elif quantity == "player_fact":
+            # A football fact carries its own unit, so the subject supplies it.
+            # Rendering these as dollars is what produced "provides steadier
+            # production week to week less than $0.82" — the right subject
+            # wearing the wrong unit, which reads as nonsense.
+            unit = _FACT_UNITS.get(subject.rsplit(" ", 1)[-1].lower(), "")
+            shown = f"{value:.1f}{unit}"
         else:
             return raw
-        prefix = {"gt": "more than ", "lt": "less than "}.get(comparator, "")
-        return prefix + shown
+        # PARENTHETICAL, not a trailing fragment. Inline reads as a run-on
+        # with the figure bolted on — "steadier week to week less than 7.6
+        # pts/wk" — because the model wrote a complete clause and the number
+        # arrives after it. In brackets it reads as the evidence it is.
+        #
+        # `lt` says "under", not "less than": half these quantities are
+        # lower-is-better (weekly swing), and "less than" reads as a shortfall
+        # on a metric where a small number is the good news.
+        word = {"gt": "over ", "lt": "under "}.get(comparator, "")
+        return f"({word}{shown})"
 
     return " ".join(CLAIM_RE.sub(swap, text).split())

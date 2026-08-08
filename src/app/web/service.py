@@ -28,26 +28,40 @@ returns, and narration follows as its own event.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from src.app.cockpit.ledger import DecisionLedger
-from src.app.cockpit.session import Session
+from src.app.cockpit.session import (
+    MY_PICK,
+    PICK,
+    UNRESOLVED,
+    Session,
+    snake_seat,
+)
 from src.app.web import schemas
 from src.app.web.resolve import (
-    AMBIGUOUS, RESOLVED, Resolution, build_spine, resolve_name,
+    AMBIGUOUS,
+    RESOLVED,
+    Resolution,
+    build_spine,
+    resolve_name,
 )
 from src.app.web.sources.base import DraftEvent, DraftEventSource, SourceStatus
 from src.app.web.sources.manual import ManualSource
-from src.app.web.sources.replay import ReplaySource
+from src.app.web.sources.replay import PICK_KINDS, ReplaySource
 from src.app.web.sources.yahoo import YahooSource
 from src.core.errors import DataError
 from src.engine.decision.board import Board
+from src.engine.decision.roster_state import RosterState
+from src.engine.sim.bundle_build import build_projection_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +96,75 @@ class RecommendationState:
         return {"status": IDLE}
 
 
-def make_source(name: str, *, web_cfg, strategy) -> DraftEventSource:
+#: Suffix `archive_session` gives a set-aside draft log.
+ARCHIVE_SUFFIX = ".bak"
+
+
+def archive_paths(web_cfg) -> list[Path]:
+    """Archived draft logs, newest first."""
+    session_path = web_cfg.resolved(web_cfg.session_path)
+    pattern = f"{session_path.stem}.*{ARCHIVE_SUFFIX}"
+    return sorted(session_path.parent.glob(pattern),
+                  key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def describe_archive(path: Path) -> dict:
+    """One archived draft, summarized for the replay picker.
+
+    `started_at` comes from the LOG when it has one, falling back to the file
+    mtime. The two differ for a draft that ran for an hour, and the question
+    the picker answers is "which draft was this", so when it started beats
+    when it was filed away.
+    """
+    stat = path.stat()
+    out = {
+        "id": path.name,
+        "archived_at": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(
+            timespec="seconds"),
+        "started_at": None, "picks": 0, "seat": None,
+        "snapshot_id": None, "session_id": None, "readable": False,
+    }
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return out
+    events = raw.get("events", []) if isinstance(raw, dict) else []
+    out.update(
+        readable=True,
+        started_at=raw.get("started_at") or out["archived_at"],
+        session_id=raw.get("session_id"),
+        snapshot_id=raw.get("snapshot_id"),
+        seat=raw.get("my_seat"),
+        picks=sum(1 for e in events
+                  if str(e.get("kind", "")).lower() in PICK_KINDS),
+    )
+    return out
+
+
+def list_archives(web_cfg) -> list[dict]:
+    return [describe_archive(p) for p in archive_paths(web_cfg)]
+
+
+def resolve_archive(web_cfg, archive_id: str) -> Path:
+    """`archive_id` -> path, refusing anything outside the session directory.
+
+    The id arrives from a client, so it is matched against the DIRECTORY
+    LISTING rather than joined onto a path. Joining would let `../../etc`
+    through, and this endpoint reads whatever it is handed.
+    """
+    for path in archive_paths(web_cfg):
+        if path.name == archive_id:
+            return path
+    raise DataError(f"no archived draft named {archive_id!r}")
+
+
+def make_source(name: str, *, web_cfg, strategy,
+                archive_id: str | None = None) -> DraftEventSource:
     if name == "manual":
         return ManualSource()
     if name == "replay":
+        if archive_id:
+            return ReplaySource(path=resolve_archive(web_cfg, archive_id))
         if not web_cfg.replay_path:
             raise DataError("source 'replay' requires web.replay_path")
         return ReplaySource(path=web_cfg.resolved(web_cfg.replay_path))
@@ -129,7 +208,8 @@ class CockpitService:
     def players(self) -> pd.DataFrame:
         return self.board.players
 
-    def start_session(self, *, seat: int, source: str, resume: bool) -> Session:
+    def start_session(self, *, seat: int, source: str, resume: bool,
+                      archive_id: str | None = None) -> Session:
         # Release whatever the previous session held FIRST. Restarting or
         # resuming in the same process otherwise leaks a sqlite3 connection per
         # call, and for YahooSource an open OAuth2Client, because `close()` only
@@ -154,21 +234,79 @@ class CockpitService:
         self.ledger = DecisionLedger(
             self.web_cfg.resolved(self.web_cfg.ledger_path))
         self.source = make_source(source, web_cfg=self.web_cfg,
-                                  strategy=self.strategy)
+                                  strategy=self.strategy,
+                                  archive_id=archive_id)
         self.source.start()
         self.generation += 1
         self.recommendation = RecommendationState()
+        self._warm_projection_bundle()
         return self.session
 
-    def archive_session(self) -> Path | None:
-        """Never truncates the ledger — it is append-only and hash-chained by
-        design, and a draft you deleted the record of is a draft you cannot
-        review in November."""
+    def _warm_projection_bundle(self) -> None:
+        """Pay the network cost at SETUP, never on the pick clock.
+
+        `build_projection_bundle` reaches nflverse for hazard covariates and
+        took 61.85 s on the live board — against a 25 s allocator budget, so
+        the first tier-0 recommendation blew its deadline before evaluating a
+        single candidate and answered from two draws instead of fifty. It was
+        not merely slow: the cold run returned a DIFFERENT leader than the
+        warm one, because it had no simulation behind it.
+
+        The bundle is memoized on the full board, which does not change during
+        a draft, so doing it once here makes every pick warm. Failures are
+        swallowed on purpose — this is a head start, and a draft must still
+        start if nflverse is unreachable.
+        """
+        try:
+            weeks = (self.cfg.schedule.regular_season_weeks
+                     + len(self.cfg.schedule.playoff_weeks))
+            frame = self.board.players.reset_index(drop=True).copy()
+            frame["player_id"] = frame["player_id"].astype(str)
+            started = time.perf_counter()
+            build_projection_bundle(frame, self.cfg, weeks)
+            logger.info("projection bundle warmed in %.1fs",
+                        time.perf_counter() - started)
+        except Exception as exc:                  # noqa: BLE001
+            logger.warning("bundle warm-up skipped (%s); the first "
+                           "recommendation will pay for it", exc)
+
+    def archive_session(self, *, purge: bool = False) -> Path | None:
+        """Clear the active draft. Archives by default, deletes on `purge`.
+
+        Two paths because they are not the same act. Archiving renames the log
+        aside and is recoverable; purging is not, so it is a separate request
+        the UI has to ask for deliberately.
+
+        **Archiving never touches the ledger; purging does.** Archiving is
+        "put this aside", so the record of what the engine said must survive
+        it — that is the whole reason the ledger is append-only and
+        hash-chained. Purging is "this draft did not happen", and leaving its
+        decisions behind would mean a ledger describing a draft with no log,
+        which is worse than either keeping both or removing both.
+
+        Only the ACTIVE draft can be purged, and it is by construction the
+        newest in the ledger, so its entries are a contiguous suffix and the
+        chain that remains still verifies from genesis. `delete_session`
+        refuses anything else.
+        """
         path = self.web_cfg.resolved(self.web_cfg.session_path)
         archived = None
+        if purge and self.ledger is not None and self.session is not None:
+            try:
+                removed = self.ledger.delete_session(self.session.session_id)
+                if removed:
+                    logger.info("purged %d ledger entries for session %s",
+                                removed, self.session.session_id)
+            except Exception as exc:              # noqa: BLE001
+                # A ledger that refuses to lose its chain is doing its job;
+                # never let that block clearing the screen.
+                logger.warning("ledger purge skipped: %s", exc)
         if path.exists():
-            archived = path.with_suffix(f".{int(time.time())}.bak")
-            path.replace(archived)
+            if purge:
+                path.unlink()
+            else:
+                archived = path.with_suffix(f".{int(time.time())}.bak")
+                path.replace(archived)
         self.close()
         self.source = None
         self.ledger = None
@@ -241,7 +379,7 @@ class CockpitService:
             return
         try:
             self.ledger.append(
-                self.board.snapshot_id,
+                self.session.session_id,
                 pick_no=self.session.state.pick_number - 1,
                 tier=int(state.payload.get("tier", 3)),
                 recommendation=schemas.ledger_recommendation(state.payload),
@@ -258,6 +396,102 @@ class CockpitService:
         return self.session
 
     # ------------------------------------------------------------- reading
+    def roster_slots(self, positions: dict[str, str],
+                     names: dict[str, str]) -> list[dict]:
+        """Every starting slot in league order, filled or empty.
+
+        The UI shows the shape of the roster, not just what is on it — an
+        empty TE slot in round 12 is the single most useful thing on the
+        screen, and a list of drafted players cannot show it.
+
+        Assignment reuses `RosterState._assign_slot`'s rule rather than
+        reimplementing it: pure position first, then FLEX if eligible, then
+        bench. Two different answers to "which slot is this player in" is the
+        same class of split-brain that produced the K/DST bug.
+        """
+        state = self._require_session().state
+        rs = RosterState(cfg=self.cfg, draft_position=self.session.my_seat + 1)
+        placed: dict[str, list[str]] = {}
+        bench: list[str] = []
+
+        for pid in state.my_roster:
+            position = positions.get(pid, "")
+            before = dict(rs.slot_fill)
+            rs._assign_slot(position)
+            moved = next((s for s, n in rs.slot_fill.items()
+                          if n > before.get(s, 0)), "BENCH")
+            if moved == "BENCH":
+                bench.append(pid)
+            else:
+                placed.setdefault(moved, []).append(pid)
+
+        def entry(slot: str, pid: str | None) -> dict:
+            return {"slot": slot, "player_id": pid,
+                    "name": names.get(pid) if pid else None,
+                    "position": positions.get(pid) if pid else None}
+
+        out: list[dict] = []
+        for slot, count in self.cfg.roster.slots.items():
+            if slot == "BENCH":
+                continue
+            filled = placed.get(slot, [])
+            for i in range(int(count)):
+                out.append(entry(slot, filled[i] if i < len(filled) else None))
+
+        # Bench slots ALWAYS render, filled or not — same reason the starters
+        # do. "Four bench spots left" is a real constraint late in a draft, and
+        # a rail that only shows what you already have cannot express it.
+        # Overflow lands here: a third WR fills FLEX (a starting slot that
+        # takes RB/WR/TE), the fourth benches.
+        bench_size = int(self.cfg.roster.slots.get("BENCH", 0))
+        for i in range(max(bench_size, len(bench))):
+            out.append(entry("BENCH", bench[i] if i < len(bench) else None))
+        return out
+
+    def draft_grid(self, positions: dict[str, str],
+                   names: dict[str, str]) -> list[dict]:
+        """Every pick made so far, with the seat and round it landed in.
+
+        Rebuilt from the EVENT LOG rather than from `state.drafted`, because an
+        unresolved pick consumes a slot without adding a drafted id. Deriving
+        the grid from `drafted` alone would shift every later pick one column
+        left the moment a name failed to resolve — the same off-by-one the
+        clock fix exists to prevent, showing up again in the display.
+        """
+        session = self._require_session()
+        teams = self.cfg.teams
+        out: list[dict] = []
+        n = 0
+        for event in session.events:
+            if event.kind not in (PICK, MY_PICK, UNRESOLVED):
+                continue
+            n += 1
+            seat = (event.seat if event.seat is not None
+                    else snake_seat(n, teams))
+            pid = event.player_id or None
+            out.append({
+                "pick_number": n,
+                "round": (n - 1) // teams + 1,
+                "seat": seat,
+                "player_id": pid,
+                "name": (names.get(pid, pid) if pid
+                         else (event.raw_input or "unresolved")),
+                "position": positions.get(pid) if pid else None,
+                "resolved": pid is not None,
+                "is_mine": seat == session.my_seat,
+            })
+        return out
+
+    def team_names(self) -> list[str]:
+        """Configured names, padded or truncated to the league size.
+
+        Generic until the real draft order is known — a placeholder that is
+        obviously a placeholder beats a wrong name that looks right.
+        """
+        configured = list(getattr(self.web_cfg, "team_names", []) or [])
+        return [configured[i] if i < len(configured) else f"Team {i + 1}"
+                for i in range(self.cfg.teams)]
+
     def session_payload(self) -> dict:
         session = self._require_session()
         state = session.state
@@ -288,6 +522,9 @@ class CockpitService:
             "my_roster": [{"player_id": p, "name": names.get(p, p),
                            "position": positions.get(p, "")}
                           for p in state.my_roster],
+            "roster_slots": self.roster_slots(positions, names),
+            "picks": self.draft_grid(positions, names),
+            "team_names": self.team_names(),
             "source": {"name": (self.source.name if self.source is not None
                                 else "none"),
                        "state": status.state, "detail": status.detail},
@@ -349,7 +586,8 @@ class CockpitService:
             budget_seconds=self.web_cfg.engine.budget_seconds)
 
     def narrate(self, record):
-        from src.app.narration import NarrationConfig, narrate as _narrate
+        from src.app.narration import NarrationConfig
+        from src.app.narration import narrate as _narrate
         from src.app.narration.backends import OllamaBackend
 
         cfg = NarrationConfig.from_strategy(self.strategy)

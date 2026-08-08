@@ -47,6 +47,14 @@ export interface RosterEntry {
   position: string;
 }
 
+/** One starting slot, filled or not. Empty slots are the useful part. */
+export interface RosterSlot {
+  slot: string;
+  player_id: string | null;
+  name: string | null;
+  position: string | null;
+}
+
 export interface SessionState {
   seat: number;
   teams: number;
@@ -63,6 +71,9 @@ export interface SessionState {
   unresolved: string[];
   pick_clock_seconds: number;
   my_roster: RosterEntry[];
+  roster_slots: RosterSlot[];
+  picks: DraftPick[];
+  team_names: string[];
   source: { name: string; state: string; detail: string };
 }
 
@@ -84,4 +95,29 @@ export interface League {
   default_source: string;
   session_exists: boolean;
   active: boolean;
+}
+
+/** One archived draft, as offered by the Replay picker. */
+export interface ReplayOption {
+  id: string;
+  /** When the draft STARTED — the question the picker answers is "which
+   *  draft was this", and a long draft starts well before it is filed. */
+  started_at: string | null;
+  archived_at: string;
+  picks: number;
+  seat: number | null;
+  snapshot_id: string | null;
+  session_id: string | null;
+  readable: boolean;
+}
+
+export interface DraftPick {
+  pick_number: number;
+  round: number;
+  seat: number;
+  player_id: string | null;
+  name: string;
+  position: string | null;
+  resolved: boolean;
+  is_mine: boolean;
 }

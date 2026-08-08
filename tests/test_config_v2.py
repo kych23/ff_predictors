@@ -73,8 +73,17 @@ def test_points_allowed_tiers_must_tile(league_raw):
 
 
 def test_bracket_must_resolve(league_raw):
-    league_raw["schedule"]["playoff_teams"] = 7   # 7 - 2 = 5, not a power of two
-    with pytest.raises(ConfigError, match="power of two"):
+    league_raw["schedule"]["playoff_teams"] = 7   # 7 - 2 = 5 cannot be paired
+    with pytest.raises(ConfigError, match="odd"):
+        _validate(league_raw)
+
+
+def test_a_bracket_that_only_breaks_after_the_byes_rejoin_is_rejected(league_raw):
+    """The gap the old power-of-two rule left. 6 - 4 = 2 IS a power of two, so
+    round 0 looked fine; round 1 then had 5 teams and `final_ranks` dropped the
+    middle seed into uninitialized memory. See tests/test_bracket_shape.py."""
+    league_raw["schedule"]["playoff_byes"] = 4
+    with pytest.raises(ConfigError, match="odd"):
         _validate(league_raw)
 
 
@@ -190,14 +199,19 @@ def _prizes(strategy_raw, prizes):
     return strategy_raw
 
 
-POT = 384.0
+#: DERIVED from the shipped config, never hardcoded. These tests exercise the
+#: conservation MACHINERY, not one league's dollar figures, and pinning 384.0
+#: here made a real payout change (champion 300 -> 260 + a 40 runner-up, weekly
+#: 6 -> 9) look like seven broken tests.
+POT = load_strategy(load_league()).payout.pot(load_league().teams)
+_WEEKLY_WEEKS = 14
 
 STRUCTURES = {
     "live_config": [
         {"id": "champ", "type": "final_rank", "rank": 1,
-         "amount": {"dollars": 300}, "ties": "split"},
+         "amount": {"dollars": POT - 9.0 * _WEEKLY_WEEKS}, "ties": "split"},
         {"id": "weekly", "type": "weekly_high_score", "weeks": {"from": 1, "to": 14},
-         "amount": {"dollars": 6}, "ties": "split"},
+         "amount": {"dollars": 9}, "ties": "split"},
     ],
     "winner_take_all": [
         {"id": "champ", "type": "final_rank", "rank": 1,
@@ -213,17 +227,17 @@ STRUCTURES = {
     ],
     "champ_plus_points_title": [
         {"id": "champ", "type": "final_rank", "rank": 1,
-         "amount": {"dollars": 300}, "ties": "split"},
+         "amount": {"dollars": POT * 0.75}, "ties": "split"},
         {"id": "points", "type": "season_points_rank", "rank": 1,
-         "amount": {"dollars": 84}, "ties": "split"},
+         "amount": {"dollars": POT * 0.25}, "ties": "split"},
     ],
     "champ_weekly_points": [
         {"id": "champ", "type": "final_rank", "rank": 1,
-         "amount": {"dollars": 250}, "ties": "split"},
+         "amount": {"dollars": POT - 6.0 * _WEEKLY_WEEKS - 50.0}, "ties": "split"},
         {"id": "weekly", "type": "weekly_high_score", "weeks": {"from": 1, "to": 14},
          "amount": {"dollars": 6}, "ties": "split"},
         {"id": "points", "type": "season_points_rank", "rank": 1,
-         "amount": {"dollars": 50}, "ties": "split"},
+         "amount": {"dollars": 50.0}, "ties": "split"},
     ],
 }
 
@@ -247,7 +261,7 @@ def test_unbalanced_payout_is_refused(league, tmp_path, strategy_raw):
     with pytest.raises(PayoutImbalanceError) as exc:
         _load_strategy_from(tmp_path, _prizes(strategy_raw, prizes), league)
     assert exc.value.computed == 300.0
-    assert exc.value.pot == POT
+    assert exc.value.pot == pytest.approx(POT)
 
 
 def test_unknown_prize_type_lists_registered_types(league, tmp_path, strategy_raw):

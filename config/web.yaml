@@ -34,7 +34,23 @@ narration_timeout_seconds: 12
 
 # Cosmetic client-side countdown only. Nothing in Session or league.yaml knows
 # about a pick clock; this is a display timer seeded at each state frame.
-pick_clock_seconds: 90
+pick_clock_seconds: 60
+
+# Draft order, seat 1 first. Kyle is seat 1, so his picks are 1, 24, 25, 48 …
+# — first overall, then back-to-back at every turn.
+team_names:
+  - Kyle        # you
+  - Gavin
+  - Christian
+  - Kevin
+  - Sheil
+  - Raam
+  - Akhil
+  - Ashay
+  - Dhruv
+  - Ryan
+  - Zach
+  - Alex
 
 session_path: data/web/session.json
 ledger_path: data/web/ledger.sqlite

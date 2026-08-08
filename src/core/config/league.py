@@ -162,6 +162,57 @@ def _is_power_of_two(n: int) -> bool:
     return n > 0 and (n & (n - 1)) == 0
 
 
+def bracket_round_sizes(playoff_teams: int, playoff_byes: int) -> list[int]:
+    """Teams playing a matchup in each bracket round. Raises if it cannot resolve.
+
+    Lives in core so that `_validate` and `domain.schedule.bracket` share ONE
+    definition of the round structure. They used to disagree, and the
+    disagreement was silent.
+
+    The old rule — ``playoff_teams - playoff_byes`` is a power of two — is
+    necessary but NOT sufficient. It only constrains round 0. Byes rejoin in
+    round 1, so the size that matters there is ``(pt - pb) / 2 + pb``, which
+    can be odd even when round 0 is a clean power of two. `final_ranks` pairs
+    with ``range(len(active) // 2)``, so an odd round drops the middle seed:
+    that team is never eliminated and never advances, and since the rank array
+    is `np.empty` its entry stays uninitialized.
+
+    Demonstrated on this league with a single character changed — 12 teams, 6
+    playoff teams, ``playoff_byes: 4`` (6 - 4 = 2, a power of two, so the old
+    rule passed): round 1 had 5 active teams and a rep came back with ranks
+    ``[0, 1, 2, ..., 5, 7, ..., 12]``. Rank 0 is garbage memory and rank 6
+    never existed, so a prize keyed on a rank pays the wrong team or nobody. A
+    search of every config the old rule admitted found **262** such shapes.
+
+    Enumerating the rounds is both the check and the depth, so the two cannot
+    drift apart again.
+    """
+    if playoff_teams < 1:
+        raise ConfigError(f"playoff_teams must be >= 1, got {playoff_teams}")
+    if playoff_byes < 0:
+        raise ConfigError(f"playoff_byes must be >= 0, got {playoff_byes}")
+    if playoff_byes >= playoff_teams:
+        raise ConfigError(
+            f"playoff_byes ({playoff_byes}) must be fewer than playoff_teams "
+            f"({playoff_teams}); every seed cannot have a bye"
+        )
+
+    byes, active = playoff_byes, playoff_teams - playoff_byes
+    sizes: list[int] = []
+    while active + byes > 1:
+        if active % 2:
+            raise ConfigError(
+                f"playoff_teams={playoff_teams}, playoff_byes={playoff_byes} "
+                f"leaves {active} teams in bracket round {len(sizes)}, which is "
+                f"odd and cannot be paired — one seed would be dropped from the "
+                f"bracket entirely"
+            )
+        sizes.append(active)
+        active = active // 2 + byes
+        byes = 0
+    return sizes
+
+
 def _validate(raw: Mapping[str, Any]) -> None:
     missing = _REQUIRED_SECTIONS - set(raw)
     if missing:
@@ -209,12 +260,7 @@ def _validate(raw: Mapping[str, Any]) -> None:
     pt, pb = int(sched["playoff_teams"]), int(sched["playoff_byes"])
     if pt > teams:
         raise ConfigError(f"playoff_teams ({pt}) exceeds teams ({teams})")
-    if not _is_power_of_two(pt - pb):
-        raise ConfigError(
-            f"playoff_teams - playoff_byes = {pt - pb} is not a power of two, "
-            f"so the bracket does not resolve"
-        )
-    depth = (pt - pb - 1).bit_length() + (1 if pb else 0)
+    depth = len(bracket_round_sizes(pt, pb))
     need = depth * int(sched["matchup_length_weeks"])
     if need > len(sched["playoff_weeks"]):
         raise ConfigError(

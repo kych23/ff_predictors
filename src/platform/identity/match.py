@@ -12,35 +12,16 @@ routes to replacement level with a ``no_projection`` flag.
 """
 from __future__ import annotations
 
-import re
-import unicodedata
 from dataclasses import dataclass
 from typing import Final
 
 import pandas as pd
 
-_SUFFIXES: Final = re.compile(r"\b(jr|sr|ii|iii|iv|v)\b\.?", re.IGNORECASE)
-_NON_ALNUM: Final = re.compile(r"[^a-z0-9 ]")
+from src.core.names import normalize_name
 
 #: rapidfuzz threshold and the margin the best match must clear (§11.4).
 FUZZY_MIN_SCORE: Final = 92
 FUZZY_MIN_MARGIN: Final = 6
-
-
-def normalize_name(name: str) -> str:
-    """Casefold, strip accents and punctuation, fold generational suffixes.
-
-    Suffix folding is what makes 'Marvin Harrison Jr.' and 'Marvin Harrison'
-    the same key — the mismatch class the design calls out by name.
-    """
-    if not isinstance(name, str):
-        return ""
-    text = unicodedata.normalize("NFKD", name)
-    text = "".join(c for c in text if not unicodedata.combining(c))
-    text = text.lower().replace(".", " ").replace("'", "")
-    text = _SUFFIXES.sub(" ", text)
-    text = _NON_ALNUM.sub(" ", text)
-    return " ".join(text.split())
 
 
 @dataclass(frozen=True)

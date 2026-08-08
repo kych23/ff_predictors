@@ -50,7 +50,12 @@ class Recommendation:
 
 
 def kdst_rounds_remaining(rs: roster_state.RosterState, league: LeagueConfig) -> int:
-    """How many picks I have left. K/DST become live in the last two."""
+    """How many picks I have left. K/DST become live in the last two.
+
+    UNUSED — no caller in `src/`, `scripts/` or `tests/`. `_apply_roster_shaping`
+    calls `rs.remaining_picks()` directly. Left as the named statement of the
+    rule, but it is not the thing enforcing it.
+    """
     return rs.remaining_picks()
 
 
@@ -63,10 +68,31 @@ def score(
     current_pick: int,
     value_col: str = "value",
     stale_flags: tuple[str, ...] = (),
+    preseason_board: pd.DataFrame | None = None,
 ) -> Recommendation:
-    """Rank the board for the pick being made at ``current_pick``."""
+    """Rank the board for the pick being made at ``current_pick``.
+
+    ``preseason_board`` is the FULL board including already-drafted players.
+    Replacement level is structural scarcity and §3 fixes it preseason:
+    recomputing it from what is still available makes it fall as a position
+    drains, which is intra-draft scarcity — the effect VONA's wait term already
+    owns. `replacement.py` states this invariant; this function used to break
+    it by passing ``available``.
+
+    The violation hid because it mostly cancels. With an open starter slot
+    ``vona = (value - repl) - (E_best - repl) = value - E_best``, so the level
+    drops out and no ranking moves — measured identical at picks 25, 49 and 97
+    even though replacement[RB] had fallen from 9.92 to 4.83 across that span.
+    It stops cancelling once ``marginal`` or ``wait_term`` hits its ``max(0,
+    .)`` clamp, which is the late rounds: at pick 133, 51 of 124 players
+    changed score and the ordering changed with them.
+
+    Defaults to ``available`` only so existing single-board callers keep
+    working; every live path passes the preseason board.
+    """
     levels = replacement_mod.compute_replacement(
-        available, cfg=league, value_col=value_col
+        available if preseason_board is None else preseason_board,
+        cfg=league, value_col=value_col,
     )
     # correction 1: the horizon is my NEXT turn, strictly after this one
     next_pick = rs.next_my_pick(after_overall=current_pick)
@@ -98,6 +124,22 @@ def _apply_roster_shaping(
         mask = out["position"].isin(EMPIRICAL_POSITIONS)
         out.loc[mask, "vona_score"] -= SINK
         out.loc[mask, "sink_reason"] = "k_dst_wait_for_endgame"
+
+    # EARLY-ROUND caps, which expire. A second tight end is legal all draft and
+    # wrong in round 3: he has no starting slot of his own and reaches the
+    # lineup only through FLEX, competing with every back and receiver left.
+    # The objective prices that thinly, but thinly is not never — a
+    # high-variance TE2 can still take a shortlist place off upside alone, and
+    # a shortlist place is what buys entry to the expensive simulation.
+    current_round = rs.my_current_round()
+    for position, rule in strategy.early_round_caps.items():
+        through = int(rule.get("through_round", 0))
+        limit = int(rule.get("max", 0))
+        if current_round <= through and rs.position_count(position) >= limit:
+            mask = out["position"] == position
+            out.loc[mask, "vona_score"] -= SINK
+            out.loc[mask & (out["sink_reason"] == ""), "sink_reason"] = \
+                f"{position}_max_{limit}_through_round_{through}"
 
     # positional caps from strategy.yaml (never model-affecting, so tuning them
     # leaves every trained model valid — §10.1)

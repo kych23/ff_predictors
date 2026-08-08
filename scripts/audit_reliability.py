@@ -29,6 +29,7 @@ from src.engine.audit.reliability import (  # noqa: E402
     reliability,
     resample_players_within_season,
 )
+from src.models.artifacts import newest  # noqa: E402
 from src.models.projection.quantile_model import QuantileGBM  # noqa: E402
 from src.platform import bundle as bundle_mod  # noqa: E402
 
@@ -47,10 +48,10 @@ def load_states(snapshot_id: str) -> list[dict]:
 
 def load_training_matrix() -> tuple[pd.DataFrame, list[str]]:
     """The feature matrix the projection model was last trained on."""
-    metas = sorted(ARTIFACTS.glob("projections_*.meta.json"))
-    if not metas:
+    meta_path = newest("projections_*.meta.json", root=ARTIFACTS)
+    if meta_path is None:
         raise SystemExit("no projection artifact; run train_projection_v2.py")
-    meta = json.loads(metas[-1].read_text())
+    meta = json.loads(meta_path.read_text())
     path = ARTIFACTS / f"training_matrix_{meta['snapshot_id']}.parquet"
     if not path.exists():
         raise SystemExit(

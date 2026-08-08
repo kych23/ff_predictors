@@ -42,21 +42,28 @@ logger = logging.getLogger(__name__)
 OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_LOCAL_MODEL = "qwen2.5:7b"
 
-#: How many claim-bearing clauses a narration may contain. Three sentences is
-#: the §18 budget; beyond that the model starts restating the table.
-MAX_CLAUSES = 3
+#: How many claim-bearing clauses a narration may contain. Past roughly this
+#: many the model stops explaining and starts restating the table — every
+#: extra clause is another row of the same numbers in prose.
+MAX_CLAUSES = 4
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT_TEMPLATE = """\
 You explain a fantasy-football draft recommendation that has ALREADY been made. \
 You are not deciding anything. The pick is fixed.
 
 You will receive an attribution record: why the leading player beats the \
 runner-up, decomposed by prize and by week.
-
+{football}
 Return JSON matching the schema. For each clause:
-  - `text` is a short phrase with NO NUMBERS IN IT AT ALL. Not digits, not \
-words like "two", "twice", "half" or "double". The number is inserted after \
-you, automatically.
+  - `text` is a COMPLETE CLAUSE that reads as a finished thought on its own, \
+with NO NUMBERS IN IT AT ALL — not digits, not words like "two", "twice", \
+"half" or "double". The figure is appended in brackets afterwards, so write \
+the sentence as though the number were not coming: "Henderson swings less \
+week to week than LaPorta" reads correctly once "(under 7.6 pts/wk)" is added; \
+"Henderson is steadier by" does not.
+  - Say WHY it matters, not just that it is true. "He plays more games" is a \
+fact; "he misses fewer weeks, so your flex is covered when byes hit" is a \
+reason. One clause of consequence beats two of restatement.
   - Refer to the players BY NAME. Never write "the two players", "the two \
 backs" or "between the two" — say "both" or name them. This is the single \
 most common way a response gets discarded.
@@ -65,10 +72,65 @@ allowed values.
   - `comparator` is how to read it: `approx` for a plain amount, `gt` or `lt` \
 for a directional statement.
 
-Write like an analyst talking to someone on the clock: what separates these two \
-players, and where the separation comes from. Be specific and brief. Do not \
-hedge, do not restate the whole table, do not give advice.\
+Only cite what is in the record. You do NOT know about trades, new teams, \
+holdouts, coaching changes, target share or depth charts — none of that is \
+given to you, and inventing it gets the whole response discarded. Be specific \
+and brief. Do not hedge, do not restate the table, do not give advice.\
 """
+
+
+#: Added to the prompt ONLY when the record actually carries football facts.
+#: Without them the enum offers nothing but money, and pushing a football
+#: framing produces football words bolted to a dollar figure — measured:
+#: "both are durable $2.24", which reads worse than the money framing it
+#: replaced.
+FOOTBALL_GUIDANCE = """
+Talk about FOOTBALL, the way you would to someone across the table on draft \
+night. Who holds up over a season, who you can start without checking first, \
+who is gone if you wait, where the hole in this roster is. That is the whole \
+story — the dollars are a footnote to it.
+
+NO clause about money unless nothing else separates them. If you cite a dollar \
+figure at all, make it the last one, never the first.
+
+Write the way people actually talk about players. "He is on the field every \
+week" beats "high expected games". "You can flex him without thinking" beats \
+"low variance". "He will not be there when you pick again" beats "low survival \
+probability". Same underlying fact, and the first version is the one worth \
+reading.
+
+Aim for three or four clauses that build an argument: what separates these two \
+as players, why that fits this roster, and what waiting costs. A single \
+sentence is too thin to be worth reading over the table.
+
+Available football facts, per player:
+  - `<player> games`        how much of the season he is on the field
+  - `<player> consistency`  week-to-week swing; LOWER is steadier, more startable
+  - `<player> adp`          where the room is taking him
+  - `<player>` (a name alone) how likely he is to last until your next pick
+
+RULES that get a clause thrown away, so follow them exactly:
+  - A football fact belongs to ONE player. NAME HIM. Never "both", "neither", \
+"either" or "each" in a clause carrying a football fact — the number inserted \
+is one player's, and those words claim something about a player it never \
+measured.
+  - The words must match the number. If you write "durable" or "games played", \
+the subject must be that player's `games`. If you write "consistent" or \
+"steady", it must be his `consistency`. A durability sentence carrying a \
+dollar figure is discarded.
+  - Prefer comparing the two players on the SAME fact — "X is on the field \
+more weeks than Y" — over describing one in isolation.
+  - Do NOT invent scouting. You are not told about trades, new teams, holdouts, \
+coaching changes, target share, snap counts or depth charts. Writing like an \
+analyst means the CADENCE of one, not claims you cannot back. Everything you \
+assert has to trace to a fact above.
+"""
+
+
+def system_prompt(record: AttributionRecord) -> str:
+    """Football framing only when there are football facts to cite."""
+    return SYSTEM_PROMPT_TEMPLATE.format(
+        football=FOOTBALL_GUIDANCE if record.fact_subjects() else "")
 
 
 @dataclass(frozen=True)
@@ -100,7 +162,8 @@ def allowed_subjects(record: AttributionRecord) -> dict[str, list[str]]:
     dollars = sorted(record.delta_by_prize) + ["total", "total_se"]
     probability = sorted(record.display(p)
                          for p in record.survival_probabilities)
-    return {"dollars": dollars, "probability": probability}
+    return {"dollars": dollars, "probability": probability,
+            "player_fact": record.fact_subjects()}
 
 
 def quantity_of(record: AttributionRecord, subject: str) -> str | None:
@@ -270,7 +333,7 @@ class OllamaBackend:
                 # drifting into number-words like "three".
                 "options": {"temperature": 0.2, "num_predict": max_tokens},
                 "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt(record)},
                     {"role": "user", "content": prompt_payload(record)},
                 ],
             },
@@ -309,7 +372,7 @@ class AnthropicBackend:
         schema = json.dumps(response_schema(record), indent=2)
         response = client.messages.create(
             model=model, max_tokens=max_tokens,
-            system=f"{SYSTEM_PROMPT}\n\nJSON schema:\n{schema}",
+            system=f"{system_prompt(record)}\n\nJSON schema:\n{schema}",
             messages=[{"role": "user", "content": prompt_payload(record)}],
         )
         text = "".join(b.text for b in response.content
