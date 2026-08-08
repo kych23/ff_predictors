@@ -36,7 +36,19 @@ Thumbs.db
 /models/
 *.pkl
 # local HTTP cache (FFC/CFBD) — regenerable, not source
-data/
+# Draft-night state stays local: session logs, archives and the decision
+# ledger are personal and change constantly.
+data/web/
+data/raw/
+data/blobs/
+
+# The FITTED artifacts and the bundle ARE tracked. They are the product of a
+# ~20-minute pipeline plus a CFBD pull, and losing the laptop before draft day
+# would mean rebuilding from scratch. `scripts/prune_artifacts.py` keeps the
+# directory to one live generation (~1 MB); without it, every run adds another.
+data/*
+!data/artifacts/
+!data/bundles/
 
 .agents/
 .claude/*

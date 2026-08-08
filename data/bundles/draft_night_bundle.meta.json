@@ -1,0 +1,8 @@
+{
+  "snapshot_id": "sn2_4528c4495e21da28eeaff853",
+  "model_version": "draft_v2.a4107ecc2a9c",
+  "decision_version": "dec_v2.09e4cf71e67b",
+  "value_source": "quantile_model",
+  "built_at": "2026-08-08T04:45:01+00:00",
+  "n_players": 256
+}

@@ -1,0 +1,9 @@
+{
+  "snapshot_id": "sn2_6e6d135a8a144efbf34065ea",
+  "model_version": "draft_v2.a4107ecc2a9c",
+  "code_digest": "95fd741c0356",
+  "target_season": 2026,
+  "n_players": 915,
+  "n_features": 56,
+  "folds": 9
+}

@@ -1,0 +1,45 @@
+{
+  "snapshot_id": "sn2_e5789414addfdc63df0621fe",
+  "engine": {
+    "reps": 32,
+    "shortlist": 4,
+    "budget_seconds": 1.5,
+    "score_reps": 256
+  },
+  "replicates": [
+    {
+      "seed": 0,
+      "seat": 0,
+      "engine_dollars": 104.671875,
+      "bot_dollars": 11.0859375,
+      "delta": 93.5859375
+    },
+    {
+      "seed": 1,
+      "seat": 1,
+      "engine_dollars": 131.9296875,
+      "bot_dollars": 44.578125,
+      "delta": 87.3515625
+    },
+    {
+      "seed": 2,
+      "seat": 2,
+      "engine_dollars": 60.4453125,
+      "bot_dollars": 58.3125,
+      "delta": 2.1328125
+    }
+  ],
+  "n": 3,
+  "mean_delta": 61.0234375,
+  "sd": 51.09595035399699,
+  "se": 29.500260691379918,
+  "ci95": [
+    3.2029265448953623,
+    118.84394845510464
+  ],
+  "mde_at_80pct_power": 82.60072993586377,
+  "expected_effect": 4.0,
+  "wins": 3,
+  "separated_from_zero": true,
+  "powered_for_expected": false
+}

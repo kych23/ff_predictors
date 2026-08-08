@@ -1,0 +1,21 @@
+{
+  "intercept": 0.3656875999596659,
+  "log_mu_coef": 0.5705060139292121,
+  "position_effects": {
+    "QB": 0.0,
+    "RB": 0.18949156676372417,
+    "TE": 0.1407132987369463,
+    "WR": 0.21627309160453626
+  },
+  "smearing": 1.0305581745638115,
+  "floor_ratio": 0.35,
+  "n_observations": 4923,
+  "snapshot_id": "sn2_e355d46dc0ba08b87d942e0f",
+  "model_version": "draft_v2.a4107ecc2a9c",
+  "positions": [
+    "QB",
+    "RB",
+    "TE",
+    "WR"
+  ]
+}
