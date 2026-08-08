@@ -1,161 +1,207 @@
-#!/usr/bin/env python
-"""Replay a COMPLETED season as a mock draft and score it against actual FPPG.
+"""Full-draft rehearsal and chaos harness (§22.1 day 20).
 
-Runs the VONA recommender from a chosen slot against 11 ADP bots on a past season's
-projections + ADP (the same validated Tier-2 engine in ``benchmark/draft_sim.py``),
-then scores every team's best legal starting lineup by that season's ACTUAL per-game
-fantasy points (the labels). Answers: "if I'd drafted with this tool last year, how
-would my roster actually have done?"
+    venv/bin/python scripts/mock_draft.py --seat 4
+    venv/bin/python scripts/mock_draft.py --seat 4 --chaos
 
-  python scripts/mock_draft.py --season 2025 --position 3     # one slot, full detail
-  python scripts/mock_draft.py --season 2025 --all-slots      # all 12 slots, summary
+Plays all 180 picks against the real bundle: eleven ADP bots with Gumbel noise,
+and the engine on my seat, driven through the same `Session` the live cockpit
+uses. Nothing is stubbed — the same ladder, ledger, spine and narration path.
 
-The draft is deterministic (bots take lowest ADP; recommender takes its #1), so one
-run per slot is exact — no Monte Carlo needed.
+`--chaos` injects the failures that actually happen at a draft, rather than the
+ones that are easy to simulate:
+
+    a name nobody can resolve      typo'd surname mid-draft
+    a player taken twice           someone calls a name already gone
+    an undo under time pressure    the classic
+    an injury scratch              `zero` on a rostered player
+    a mid-draft restart            process dies, resume from disk
+
+**The pass criterion is not "no exception".** It is that every one of my picks
+came back inside the latency budget and the ledger chain verifies at the end.
+A tool that survives by silently doing nothing has not survived.
 """
 from __future__ import annotations
 
 import argparse
-import pathlib
 import sys
-
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import time
+from pathlib import Path
 
 import numpy as np
-import pandas as pd
-from sqlalchemy import select
 
-from src.benchmark.draft_sim import optimal_lineup, optimal_lineup_value, simulate_draft
-from src.config import load_config
-from src.db.loaders import (load_adp_df, load_player_names, load_projections_df,
-                            load_season_labels_df)
-from src.db.models import Adp
-from src.db.session import session_scope
-from src.recommender.recommend import build_replacement_from_projections
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from draft_recommend import build_tiers  # noqa: E402
 
-def _load(season: int, cfg):
-    with session_scope() as session:
-        proj = load_projections_df(session, season)[
-            ["player_id", "position", "p10", "p50", "p90"]]
-        adp = load_adp_df(session, cfg, season)[
-            ["player_id", "adp", "adp_stdev", "position"]]
-        labels = load_season_labels_df(session, season)[["player_id", "fppg"]]
-        names = load_player_names(session)
-    return proj, adp, labels, names
+from src.app.cockpit.ladder import recommend  # noqa: E402
+from src.app.cockpit.ledger import DecisionLedger  # noqa: E402
+from src.app.cockpit.session import Session  # noqa: E402
+from src.core.config import load_league, load_strategy  # noqa: E402
+from src.core.errors import DataError  # noqa: E402
+from src.engine.decision.board import Board  # noqa: E402
 
 
-def _seasons_with_adp(cfg) -> list:
-    """Seasons that actually have ADP rows for this league's format/teams (for hints)."""
-    with session_scope() as session:
-        rows = session.execute(
-            select(Adp.season).where(Adp.format == cfg.adp.format,
-                                     Adp.teams == cfg.adp.teams).distinct()
-        ).scalars().all()
-    return sorted(set(rows))
+def bot_order(frame, rng, noise: float) -> list[str]:
+    """ADP with Gumbel noise — a Plackett-Luce sampler, so each rehearsal is a
+    different plausible draft rather than the same snake every time."""
+    adp = frame["adp"].fillna(9999.0).to_numpy(dtype=float)
+    score = -adp + rng.gumbel(0.0, noise, len(adp))
+    ids = frame["player_id"].astype(str).to_numpy()
+    return list(ids[np.argsort(-score)])
 
 
-def _build_board(proj: pd.DataFrame, adp: pd.DataFrame) -> pd.DataFrame:
-    """ADP universe (incl. K/DEF) left-joined to projections; position from proj first."""
-    board = adp.merge(proj[["player_id", "p10", "p50", "p90"]],
-                      on="player_id", how="left")
-    proj_pos = dict(zip(proj["player_id"], proj["position"]))
-    board["position"] = board["player_id"].map(proj_pos).fillna(board["position"])
-    return board
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--seat", type=int, default=4)
+    ap.add_argument("--reps", type=int, default=256)
+    ap.add_argument("--shortlist", type=int, default=3)
+    ap.add_argument("--budget", type=float, default=25.0)
+    ap.add_argument("--noise", type=float, default=6.0)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--chaos", action="store_true")
+    ap.add_argument("--workdir", type=Path, default=Path("data/rehearsal"))
+    args = ap.parse_args()
 
+    cfg = load_league()
+    strategy = load_strategy(cfg)
+    board = Board.from_bundle()
+    frame = board.players.copy()
+    frame["player_id"] = frame["player_id"].astype(str)
+    rng = np.random.default_rng(args.seed)
 
-def _draft_one(board, cfg, slot, replacement, pos_map, fppg_map):
-    rosters = simulate_draft(board, cfg, slot, replacement)
-    our_val = optimal_lineup_value(rosters[slot], pos_map, fppg_map, cfg)
-    bot_vals = [optimal_lineup_value(rosters[t], pos_map, fppg_map, cfg)
-                for t in rosters if t != slot]
-    rank = 1 + sum(1 for v in bot_vals if v > our_val)
-    return rosters, our_val, bot_vals, rank
+    args.workdir.mkdir(parents=True, exist_ok=True)
+    session_path = args.workdir / "session.json"
+    ledger_path = args.workdir / "ledger.sqlite"
+    session_path.unlink(missing_ok=True)
+    ledger_path.unlink(missing_ok=True)
 
+    session = Session(my_seat=args.seat - 1, teams=cfg.teams,
+                      rounds=cfg.roster.rounds,
+                      snapshot_id=board.snapshot_id, path=session_path)
+    ledger = DecisionLedger(ledger_path)
+    order = bot_order(frame, rng, args.noise)
+    budget = float(strategy.simulation.decision["latency_budget_seconds"])
 
-def _run_single(board, cfg, slot, replacement, pos_map, fppg_map, names, season):
-    rosters, our_val, bot_vals, rank = _draft_one(
-        board, cfg, slot, replacement, pos_map, fppg_map)
-    my_ids = rosters[slot]
+    print(f"MOCK DRAFT — seat {args.seat}, {cfg.teams}x{cfg.roster.rounds}, "
+          f"{'CHAOS' if args.chaos else 'clean'}")
+    print(f"  bundle {board.snapshot_id}, {len(frame)} players, "
+          f"latency budget {budget:.0f}s\n")
 
-    print(f"\n=== {season} MOCK DRAFT — your slot {slot}/{cfg.teams} (recommender vs ADP bots) ===")
-    print("  your picks, round by round  (proj P50 -> actual FPPG):")
-    p50_map = dict(zip(board["player_id"], board["p50"]))
-    for rnd, pid in enumerate(my_ids, 1):
-        pos = pos_map.get(pid, "?")
-        p50 = p50_map.get(pid)
-        proj_str = f"{p50:5.1f}" if pd.notna(p50) else "  —  "
-        actual = fppg_map.get(pid)
-        act_str = f"{actual:5.1f}" if actual is not None else "  —  "
-        print(f"   R{rnd:<2} {names.get(pid, pid):24s} {pos:3s}  {proj_str} -> {act_str}")
+    my_latencies: list[float] = []
+    tiers_used: dict[int, int] = {}
+    injected: list[str] = []
+    restarts = 0
 
-    rows, total = optimal_lineup(my_ids, pos_map, fppg_map, cfg)
-    print(f"\n  best legal starting lineup (by actual {season} FPPG):")
-    for slot_label, pid, val in rows:
-        print(f"   {slot_label:4s} {names.get(pid, pid):24s} {val:5.1f}")
-    print(f"   {'':4s} {'TOTAL starting FPPG':24s} {total:5.1f}")
+    while not session.is_complete:
+        pick_no = session.state.pick_number
 
-    bot_mean = float(np.mean(bot_vals))
-    bot_best = float(np.max(bot_vals))
-    print(f"\n  vs field: you {our_val:.1f} | ADP-bot mean {bot_mean:.1f} | "
-          f"bot best {bot_best:.1f} | rank {rank} of {cfg.teams}  "
-          f"({our_val - bot_mean:+.1f} vs mean)")
+        # ---- chaos injections, at picks nobody would choose to be unlucky on
+        if args.chaos and pick_no == 7 and "unresolved" not in injected:
+            session.record_unresolved("Jauan Jennngz")
+            injected.append("unresolved")
+            print(f"  [chaos] pick {pick_no}: unresolvable name recorded")
+        if args.chaos and pick_no == 15 and "duplicate" not in injected:
+            try:
+                session.record_pick(session.state.drafted[0])
+                print("  [chaos] FAILED: a duplicate pick was accepted")
+                return 1
+            except DataError:
+                injected.append("duplicate")
+                print(f"  [chaos] pick {pick_no}: duplicate refused, log clean")
+        if args.chaos and pick_no == 23 and "restart" not in injected:
+            session = Session.load(session_path)
+            restarts += 1
+            injected.append("restart")
+            print(f"  [chaos] pick {pick_no}: reloaded from disk "
+                  f"({len(session.events)} events replayed)")
+        if (args.chaos and pick_no == 40 and "zero" not in injected
+                and session.state.my_roster):
+                session.zero_player(session.state.my_roster[0])
+                injected.append("zero")
+                print(f"  [chaos] pick {pick_no}: my RB1 scratched")
 
+        if session.is_my_turn():
+            scratch = Board.from_bundle()
+            for pid in session.state.drafted:
+                try:
+                    scratch.take(pid)
+                except Exception:      # noqa: BLE001
+                    pass
+            built, _ = build_tiers(scratch, cfg, strategy, args.seat,
+                                   args.reps, args.shortlist,
+                                   my_roster=list(session.state.my_roster),
+                                   by_seat={k: list(v) for k, v
+                                            in session.state.by_seat.items()})
+            start = time.perf_counter()
+            rec = recommend(
+                built, budget_s=args.budget,
+                demote_after_s=float(
+                    strategy.simulation.decision["demote_to_tier1_after_seconds"]),
+            )
+            elapsed = time.perf_counter() - start
+            my_latencies.append(elapsed)
+            tiers_used[rec.tier] = tiers_used.get(rec.tier, 0) + 1
 
-def _run_all_slots(board, cfg, replacement, pos_map, fppg_map, season):
-    print(f"\n=== {season} MOCK DRAFT — all {cfg.teams} slots (recommender vs ADP bots) ===")
-    print(f"  {'slot':>4}  {'you':>7}  {'bot_mean':>8}  {'diff':>6}  {'rank':>4}")
-    diffs, wins = [], 0
-    for slot in range(1, cfg.teams + 1):
-        _, our_val, bot_vals, rank = _draft_one(
-            board, cfg, slot, replacement, pos_map, fppg_map)
-        bot_mean = float(np.mean(bot_vals))
-        diff = our_val - bot_mean
-        diffs.append(diff)
-        wins += int(diff > 0)
-        print(f"  {slot:>4}  {our_val:>7.1f}  {bot_mean:>8.1f}  {diff:>+6.1f}  {rank:>4}")
-    print(f"\n  mean diff vs field: {np.mean(diffs):+.1f} | "
-          f"beat the field in {wins}/{cfg.teams} slots")
+            choice = rec.leader
+            if choice in session.state.drafted or choice not in set(frame["player_id"]):
+                choice = next(p for p in order
+                              if p not in session.state.drafted)
+            session.record_my_pick(choice)
+            ledger.append("rehearsal", pick_no=pick_no, tier=rec.tier,
+                          recommendation={"leader": rec.leader,
+                                          "leader_name": rec.leader_name},
+                          actual_pick=choice, snapshot_id=board.snapshot_id)
+            flag = "" if elapsed <= budget else "  <-- OVER BUDGET"
+            print(f"  pick {pick_no:3d} (mine)  tier {rec.tier}  "
+                  f"{rec.leader_name[:22]:22s} {elapsed:5.1f}s{flag}")
 
+            if args.chaos and pick_no > 40 and "undo" not in injected:
+                session.undo()
+                injected.append("undo")
+                print(f"  [chaos] pick {pick_no}: undone, re-picking")
+                continue
+        else:
+            pick = next((p for p in order if p not in session.state.drafted),
+                        None)
+            if pick is None:
+                break
+            session.record_pick(pick)
 
-def main() -> None:
-    cfg = load_config()
-    parser = argparse.ArgumentParser(description="Replay a past season as a scored mock draft.")
-    parser.add_argument("--season", type=int, required=True,
-                        help="A COMPLETED season (must have projections, ADP, and labels)")
-    parser.add_argument("--position", type=int, default=None,
-                        help=f"Your draft slot 1..{cfg.teams} (single-slot detail view)")
-    parser.add_argument("--all-slots", action="store_true",
-                        help="Run every slot and print a summary table")
-    args = parser.parse_args()
-    if not args.all_slots and args.position is None:
-        raise SystemExit("Pass --position N for a single slot, or --all-slots for the summary.")
+    print(f"\n  {len(session.state.drafted)} picks recorded, "
+          f"{len(session.state.my_roster)} mine")
+    roster = frame[frame["player_id"].isin(session.state.my_roster)]
+    print("  my roster: " + ", ".join(
+        f"{r.player_name} ({r.position})" for r in roster.itertuples()))
 
-    proj, adp, labels, names = _load(args.season, cfg)
-    print(f"{args.season}: projections={len(proj)} | adp={len(adp)} | labels={len(labels)}")
-    if proj.empty or adp.empty or labels.empty:
-        missing = [n for n, df in (("projections", proj), ("ADP", adp), ("labels", labels))
-                   if df.empty]
-        hint = ""
-        if missing == ["ADP"]:
-            avail = _seasons_with_adp(cfg)
-            hint = (" — the Fantasy Football Calculator API has no ADP for this season "
-                    "(it drops the just-finished season before re-archiving it). "
-                    + (f"Seasons with ADP available: {avail}." if avail else ""))
-        raise SystemExit(f"Missing {', '.join(missing)} for {args.season}.{hint}")
+    ok = True
+    print("\n  LATENCY")
+    if my_latencies:
+        over = [t for t in my_latencies if t > budget]
+        print(f"    median {np.median(my_latencies):.1f}s   "
+              f"max {max(my_latencies):.1f}s   budget {budget:.0f}s")
+        print(f"    over budget: {len(over)} of {len(my_latencies)}")
+        ok = ok and not over
+    print("  TIERS USED: "
+          + ", ".join(f"tier {t}: {n}" for t, n in sorted(tiers_used.items())))
 
-    board = _build_board(proj, adp)
-    pos_map = dict(zip(board["player_id"], board["position"]))
-    fppg_map = dict(zip(labels["player_id"], labels["fppg"]))
-    replacement = build_replacement_from_projections(proj, cfg=cfg)
+    verdict = ledger.verify()
+    print(f"  LEDGER: {verdict.detail}")
+    ok = ok and verdict.ok
+    if args.chaos:
+        print(f"  CHAOS INJECTED: {', '.join(injected) or 'none'}")
+        expected = {"unresolved", "duplicate", "restart", "zero", "undo"}
+        missing = expected - set(injected)
+        if missing:
+            print(f"    NOT EXERCISED: {sorted(missing)} — the rehearsal did "
+                  f"not actually test these")
+            ok = False
+        print(f"  RESTARTS SURVIVED: {restarts}")
 
-    if args.position is not None:
-        if not (1 <= args.position <= cfg.teams):
-            raise SystemExit(f"--position must be in 1..{cfg.teams}")
-        _run_single(board, cfg, args.position, replacement, pos_map, fppg_map, names, args.season)
-    if args.all_slots:
-        _run_all_slots(board, cfg, replacement, pos_map, fppg_map, args.season)
+    ledger.close()
+    print(f"\n  {'REHEARSAL PASSED' if ok else 'REHEARSAL FAILED'}")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

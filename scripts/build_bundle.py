@@ -1,0 +1,325 @@
+"""Build the draft-night bundle (DraftEngineDesign.md §12.6, §19, §22.1).
+
+Day-4 deliverable: a WORKING TOOL at tier 2. Per the build order, value comes
+from last season's actual points per game — not from ADP. That distinction is
+the ADP wall: the market is what the engine is measured against, so it may
+price availability (survival curves) but never supply value.
+
+Phase 6 replaces `value_source: prior_season_ppg` with `quantile_model`; the
+bundle schema does not change, only the column's provenance.
+
+Usage:
+    venv/bin/python scripts/build_bundle.py [--season 2026] [--out PATH]
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.core.config import load_league, load_strategy  # noqa: E402
+from src.core.constants import REPLACEMENT_FLOOR_QUANTILE  # noqa: E402
+from src.domain.scoring.engine import score_offense  # noqa: E402
+from src.engine.decision.tiers import build_tier_table, write_tiers  # noqa: E402
+from src.models.artifacts import newest, newest_all  # noqa: E402
+from src.platform import bundle as bundle_mod  # noqa: E402
+from src.platform.identity.match import match_by_name  # noqa: E402
+from src.platform.sources import ffc, nflverse  # noqa: E402
+from src.platform.store.manifest import (  # noqa: E402
+    build_snapshot,
+    utc_now,
+    write_manifest,
+)
+
+DEFAULT_OUT = Path("data/bundles/draft_night_bundle.parquet")
+
+
+def load_projections(season: int) -> tuple[pd.DataFrame, str] | tuple[None, None]:
+    """Newest calibrated projection artifact for `season`, if one exists.
+
+    Falls back to prior-season points when absent, so the tool never stops
+    producing a recommendation because a model has not been fitted yet — the
+    build order's hard rule (§22.1).
+    """
+    art = Path("data/artifacts")
+    for meta_path in newest_all("projections_*.meta.json", root=art):
+        meta = json.loads(meta_path.read_text())
+        if int(meta.get("target_season", -1)) != season:
+            continue
+        frame = pd.read_parquet(art / f"projections_{meta['snapshot_id']}.parquet")
+        return frame, meta["snapshot_id"]
+    return None, None
+
+
+def prior_season_value(season: int, league, entries: list) -> pd.DataFrame:
+    """Points per game from the PRIOR season, through our own scoring config.
+
+    Never uses `fantasy_points_ppr`: that column encodes a different league's
+    rules (measured: it scores interceptions at -2 where this league uses -1,
+    and awards no offensive fumble-return TD).
+    """
+    prior = season - 1
+    pull = nflverse.fetch("player_stats", seasons=[prior])
+    entries.append(pull.entry)
+    df = pull.frame
+    df = df[(df["season_type"] == "REG")
+            & df["position"].isin(league.roster.modeled_positions)].copy()
+    df["points"] = score_offense(df, league.scoring.offense)
+
+    agg = (df.groupby(["player_id", "player_display_name", "position"], as_index=False)
+             .agg(points=("points", "sum"), games=("week", "nunique")))
+    agg = agg[agg["games"] >= 1]
+    agg["value"] = agg["points"] / agg["games"]
+    return agg.rename(columns={"player_display_name": "nfl_name"})
+
+
+ARTIFACTS = Path("data/artifacts")
+
+#: Re-exported from core so the board and the simulator fill the same hole with
+#: the same number. `engine.sim.bundle_build` computes this floor too, and a
+#: second literal here meant two answers to one question.
+REPLACEMENT_QUANTILE = REPLACEMENT_FLOOR_QUANTILE
+
+
+def _latest_kdst() -> dict | None:
+    hit = newest("kdst_*.json", root=ARTIFACTS)
+    return json.loads(hit.read_text())["distributions"] if hit else None
+
+
+def fill_unvalued(frame: pd.DataFrame) -> pd.DataFrame:
+    """Replace placeholder zeros with rankable values.
+
+    A zero is not a low value — it is an unpickable one. Every consumer of this
+    column ranks on it: `recommend.score` shortlists the top few by VONA, and
+    tier 0 only ever simulates candidates that shortlist produced. A player
+    left at 0.0 therefore never reaches the simulator at all, no matter how
+    obviously correct taking him would be.
+
+    Two populations arrive here at zero, for different reasons:
+
+    **K and DST** are outside `modeled_positions`, so the quantile model never
+    covers them and they can never match a prior-season line. They get the mean
+    of their fitted empirical distribution. Without this every kicker and
+    defence is strictly dominated by any warm body, and none is ever drafted —
+    which looks like a defensible streaming strategy and is in fact a data bug.
+
+    **Everyone else** (rookies, and veterans whose name the ADP↔nflverse join
+    missed — "Deebo Samuel Sr." style suffixes are a recurring case) gets the
+    positional replacement floor. `scripts/simulate.py` already does exactly
+    this for the simulation bundle, citing BayesianArchitecture.md §3.4's "never
+    assign them a constant zero"; the board was the half that never got it, so
+    the two disagreed about the same player.
+
+    `coverage` is deliberately left as `no_prior_season` — the value is now
+    usable but it is still not a projection, and the board's `stale:` banner
+    should keep saying so.
+    """
+    out = frame.copy()
+    value = pd.to_numeric(out["value"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    source = out["value_source"].astype(str).to_numpy(dtype=object)
+    positions = out["position"].astype(str).to_numpy()
+
+    kdst = _latest_kdst()
+    n_kdst = 0
+    if kdst is not None:
+        for i, pos in enumerate(positions):
+            if pos in kdst and value[i] <= 0:
+                value[i] = float(kdst[pos]["mean"])
+                source[i] = "kdst_empirical"
+                n_kdst += 1
+    else:
+        missing = int(((value <= 0) & pd.Series(positions).isin(["K", "DST"]).to_numpy()).sum())
+        if missing:
+            print(f"      WARNING: no kdst_*.json artifact — {missing} K/DST rows "
+                  f"stay at 0.0 and CANNOT be drafted. Run scripts/fit_models.py.")
+
+    n_floor = 0
+    for pos in pd.unique(positions):
+        at_pos = positions == pos
+        valued = value[at_pos & (value > 0)]
+        if valued.size == 0:
+            continue
+        floor = float(np.quantile(valued, REPLACEMENT_QUANTILE))
+        fill = at_pos & (value <= 0)
+        if fill.any():
+            value[fill] = floor
+            source[fill] = "replacement_floor"
+            n_floor += int(fill.sum())
+
+    out["value"] = value
+    out["value_source"] = source
+    still_zero = int((value <= 0).sum())
+    print(f"      filled {n_kdst} K/DST from the fitted distribution, "
+          f"{n_floor} at the positional replacement floor"
+          + (f", {still_zero} STILL ZERO" if still_zero else ""))
+    return out
+
+
+def _optional(src: pd.DataFrame, column: str) -> pd.Series:
+    """A numeric column if the frame has one, otherwise all-NaN.
+
+    The prior-season fallback path carries no calibrated quantiles, and neither
+    do K/DST. NaN is the honest encoding — `bundle_build` falls back per row
+    rather than inventing a band for players the quantile model never covered.
+    """
+    if column not in src.columns:
+        return pd.Series(np.nan, index=src.index, dtype="float64")
+    return pd.to_numeric(src[column], errors="coerce")
+
+
+def build(season: int, out: Path) -> bundle_mod.Bundle:
+    league = load_league()
+    strategy = load_strategy(league)
+    entries: list = []
+
+    projections, proj_snapshot = load_projections(season)
+    if projections is not None:
+        print(f"[1/4] calibrated projections ({proj_snapshot})...")
+        nfl_names = prior_season_value(season, league, entries)[
+            ["player_id", "nfl_name"]].drop_duplicates("player_id")
+        values = projections.merge(nfl_names, on="player_id", how="left")
+        values = values.rename(columns={"p50": "value"})
+
+        # ROSTER TABLE FALLBACK. The name is needed only to string-match the
+        # FFC ADP list; it says nothing about whether a projection is valid.
+        # Taking it solely from prior-season stats meant every ROOKIE — who by
+        # definition has no prior-season row — was dropped here and reappeared
+        # as unmatched at value 0.0, then floored at replacement. The model had
+        # projected all 231 of them. The comment that used to sit here
+        # described this fallback; the code did `dropna` instead.
+        roster_pull = nflverse.fetch("players")
+        entries.append(roster_pull.entry)
+        roster_names = (roster_pull.frame[["gsis_id", "display_name"]]
+                        .dropna(subset=["gsis_id"])
+                        .rename(columns={"gsis_id": "player_id",
+                                         "display_name": "roster_name"})
+                        .drop_duplicates("player_id"))
+        roster_names["player_id"] = roster_names["player_id"].astype(str)
+        values["player_id"] = values["player_id"].astype(str)
+        values = values.merge(roster_names, on="player_id", how="left")
+        values["nfl_name"] = values["nfl_name"].fillna(values["roster_name"])
+        values = values.drop(columns=["roster_name"])
+        values = values.dropna(subset=["nfl_name"])
+        value_source = "quantile_model"
+        print(f"      {len(values)} players with calibrated P10/P50/P90 "
+              f"(names: prior season + roster fallback)")
+    else:
+        print(f"[1/4] prior-season value ({season - 1}) through league scoring...")
+        values = prior_season_value(season, league, entries)
+        value_source = "prior_season_ppg"
+        print(f"      {len(values)} players with >=1 game "
+              f"(no projection artifact; run train_projection_v2.py)")
+
+    print(f"[2/4] {strategy.adp.source.upper()} ADP for {season}...")
+    if strategy.adp.source != "ffc":
+        raise SystemExit(
+            f"adp.source={strategy.adp.source!r} is not available; Yahoo is "
+            f"blocked pending Fantasy Sports API permission (§11.5). "
+            f"Set adp.source: ffc in config/strategy.yaml."
+        )
+    adp_pull = ffc.fetch_adp(fmt=strategy.adp.format, teams=strategy.adp.teams,
+                             season=season)
+    entries.append(adp_pull.entry)
+    adp = adp_pull.frame
+    print(f"      {len(adp)} players priced")
+
+    print("[3/4] resolving ADP names against nflverse...")
+    report = match_by_name(adp, values, left_name="player_name",
+                           right_name="nfl_name")
+    # Coverage is only meaningful over MODELED positions: K and DST have no
+    # prior-season line by construction (they are not in modeled_positions), so
+    # counting them as misses understates match quality and hides a real
+    # regression behind a permanently-bad number.
+    modeled = set(league.roster.modeled_positions)
+    skill_missed = report.unresolved_left[
+        report.unresolved_left["position"].isin(modeled)]
+    skill_matched = report.matched[report.matched["position"].isin(modeled)]
+    denom = len(skill_matched) + len(skill_missed)
+    skill_cov = len(skill_matched) / denom if denom else 0.0
+    print(f"      {report.describe()}")
+    print(f"      modeled-position coverage: {skill_cov:.1%} "
+          f"({len(skill_matched)}/{denom}) — misses are rookies and players "
+          f"who did not appear in {season - 1}")
+    if skill_cov < 0.85:
+        print("      WARNING: modeled coverage below 85%; check name matching")
+
+    # EVERY priced player enters the bundle, matched or not. Rookies, K and DST
+    # have ADP but no prior-season line; dropping them would make them invisible
+    # to the board, and a player the room can draft must be rankable even if
+    # only at replacement (§19). `coverage` records why each row is what it is.
+    def _rows(src: pd.DataFrame, matched: bool) -> pd.DataFrame:
+        return pd.DataFrame({
+            "player_id": (src.get("player_id_r") if matched and "player_id_r" in src
+                          else src.get("player_id")).astype(str),
+            "player_name": src["player_name"],
+            "position": src["position"],
+            "team": src.get("team"),
+            "bye_week": pd.to_numeric(src.get("bye"), errors="coerce"),
+            "value": (pd.to_numeric(src["value"], errors="coerce").fillna(0.0)
+                      if matched else 0.0),
+            # The CALIBRATED band, carried through rather than reconstructed.
+            # `bundle_build` used to synthesize one from weekly sigma, which is
+            # sampling noise about a season mean and not the model's
+            # uncertainty about the rate at all. NaN here means "no calibrated
+            # band" (K/DST, unmatched rows) and the consumer falls back.
+            "value_p10": _optional(src, "p10") if matched else np.nan,
+            "value_p90": _optional(src, "p90") if matched else np.nan,
+            "value_source": value_source if matched else "none",
+            "coverage": "full" if matched else "no_prior_season",
+            "adp": pd.to_numeric(src["adp"], errors="coerce"),
+            "adp_stdev": pd.to_numeric(src["adp_stdev"], errors="coerce"),
+        })
+
+    frame = pd.concat(
+        [_rows(report.matched, True), _rows(report.unresolved_left, False)],
+        ignore_index=True,
+    ).sort_values("adp").reset_index(drop=True)
+
+    frame = fill_unvalued(frame)
+
+    by_cov = frame.groupby(["coverage", "position"]).size()
+    print("      bundle composition:")
+    for (cov, pos), n in by_cov.items():
+        print(f"        {cov:16s} {pos:4s} {n}")
+
+    snapshot_id = build_snapshot(entries)
+    write_manifest(snapshot_id, entries)
+    print(f"[4/4] snapshot {snapshot_id}")
+
+    b = bundle_mod.Bundle(
+        players=frame, snapshot_id=snapshot_id,
+        model_version=league.model_version,
+        decision_version=strategy.decision_version,
+        value_source=value_source, built_at=utc_now(),
+    )
+    bundle_mod.write(b, out)
+    print(f"      wrote {out} ({b.n_players} players)")
+
+    # Tier-3 artifact (§7.4). Written here because this is the only place that
+    # holds the finished board, and tier 3 must not depend on anything that
+    # could fail at draft time — a parquet file is the whole contract.
+    tiers = build_tier_table(frame)
+    tier_path = write_tiers(tiers, snapshot_id)
+    counts = tiers.groupby("position")["tier"].nunique()
+    print(f"      tier-3 fallback: {tier_path}")
+    print("      tiers per position: "
+          + ", ".join(f"{pos} {int(n)}" for pos, n in counts.items()))
+    return b
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--season", type=int, default=2026)
+    ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    args = ap.parse_args()
+    build(args.season, args.out)
+
+
+if __name__ == "__main__":
+    main()

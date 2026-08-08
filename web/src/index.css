@@ -1,0 +1,30 @@
+@import "@fontsource/fira-code/400.css";
+@import "@fontsource/fira-code/600.css";
+@import "@fontsource/fira-sans/400.css";
+@import "@fontsource/fira-sans/600.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+
+body {
+  @apply bg-bg text-ink font-sans antialiased;
+}
+
+/* Tabular figures are not cosmetic here: columns of E[$] must line up or the
+   comparison the whole screen exists for becomes harder to read than a table. */
+.tnum { font-family: "Fira Code", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+/* One place, so "we respect reduced motion" is true rather than aspirational. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.focusable:focus-visible {
+  @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-bg;
+}

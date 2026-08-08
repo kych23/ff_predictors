@@ -1,31 +1,57 @@
 # Loose ranges here; requirements.lock pins the exact validated versions
 # (pip install -r requirements.lock to reproduce a known-good environment).
-# Core data + modeling (DrafterSpec.md §4.10)
+
+# Core data + modeling
 nflreadpy
 pandas
-pyarrow
+pyarrow          # pandas parquet engine — the draft-night bundle format
 numpy
 scipy
 scikit-learn
-sqlalchemy>=2.0
-psycopg2
-python-dotenv
 
 # Config + gradient-boosted quantile model
 pyyaml
 lightgbm
 
-# Resilient third-party HTTP (CFBD + FFC) via src/ingest/http.py
+# Resilient third-party HTTP (FFC ADP, local narration backend)
 httpx
 
-# NOTE: CFBD college data is pulled via its REST API through ingest/http.py, NOT the
-# `cfbd` Python client — that client pins pydantic v1, which conflicts with
-# nflreadpy's pydantic v2 requirement. New .env key: CFBD_API_KEY (CFBD is not
-# anonymous), alongside DATABASE_URL.
+# Yahoo OAuth probes under scripts/spikes/ read credentials from .env
+python-dotenv
 
-# xgboost was the retired weekly model; LightGBM quantile GBM replaces it.
+# Identity spine, §11.4 `fuzzy` cascade tier. NOT optional: both spine.py and
+# match.py guard the import so the tiers above fuzzy keep working without it,
+# and that guard means an absent rapidfuzz degrades SILENTLY — every name the
+# deterministic tier misses goes straight to the confirm card. Found exactly
+# that way: the fuzzy tier was dead in this environment until it was tested.
+rapidfuzz
 
-# HTTP API (api/) — draft sessions, players, recommendations. httpx (client
-# for the API's own tests) already listed above as a shared ingest dependency.
+# Narration (§18). Optional at runtime — `narrate()` falls back to
+# `render_table`, which needs no network, no key and no model and states the
+# same attribution record. The default backend is a LOCAL model over Ollama
+# (no package needed, plain HTTP via httpx); `anthropic` is only the hosted
+# fallback. Listed because strategy.yaml ships `narration.enabled: true`, so an
+# absent package is a silent downgrade rather than a chosen one.
+anthropic
+
+# Web cockpit (src/app/web). The draft surface is now a local FastAPI app with
+# an SSE push channel and a React frontend in web/. This is a deliberate
+# reversal of the v1 deletion note that used to sit here: that note claimed the
+# engine "serves no HTTP", which stopped being true when the cockpit moved to a
+# browser. See notes/draft-cockpit-web.md.
 fastapi
 uvicorn[standard]
+sse-starlette
+
+# The API tests drive the app through httpx.ASGITransport, which is async;
+# without a runner they would be collected and silently skipped.
+pytest-asyncio
+
+# Yahoo OAuth (scripts/spikes, src/app/web/sources/yahoo.py). Imported LAZILY
+# there, so a broken install degrades the Yahoo adapter alone rather than the
+# whole cockpit.
+authlib
+
+# STILL REMOVED with the v1 deletion: sqlalchemy + psycopg2 (the research and
+# serving Postgres split). The engine reads a parquet bundle and writes a local
+# SQLite ledger; it opens no database connection.

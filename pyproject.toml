@@ -3,3 +3,36 @@
 # `from src...` imports resolve without `python -m pytest`
 pythonpath = ["."]
 testpaths = ["tests"]
+# The v1 surfaces (api/, web/, weekly start/sit) and their `v1_frozen` marker
+# were deleted outright, so nothing is deselected by default any more. `slow`
+# is kept as an opt-OUT (`pytest -m 'not slow'`), which is what it was before —
+# it was never in `addopts`.
+markers = [
+    "slow: hits the network or takes seconds; deselect with -m 'not slow'",
+]
+# The web API tests drive the app through httpx.ASGITransport, which is async.
+# Without a runner configured they would be COLLECTED AND SKIPPED silently —
+# the "verifies that something ran" failure the suite exists to prevent.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+exclude = ["venv", "web", "data"]
+
+[tool.ruff.lint]
+# Chosen for defects, not taste. F/E9 are real errors; B catches silent
+# truncation and mutable-default classes of bug; SIM and UP keep the code
+# idiomatic without arguing about formatting. E501 is off because several
+# docstrings here carry worked examples that read worse when rewrapped.
+select = ["F", "E4", "E7", "E9", "B", "SIM", "UP", "I"]
+ignore = ["E501", "B008", "SIM105", "SIM108"]
+
+[tool.ruff.lint.per-file-ignores]
+# Scripts insert the repo root on sys.path before importing src, so their
+# imports genuinely cannot sit at the top of the file.
+"scripts/*.py" = ["E402"]
+# Tests assert on behaviour, not on unused-binding hygiene; a bound name in a
+# test is often the thing under test.
+"tests/*.py" = ["F841", "B007"]

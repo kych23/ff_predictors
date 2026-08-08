@@ -1,0 +1,119 @@
+# Power assumptions for the §21.5 audit.
+#
+# These live in a config file rather than inside the audit code for one
+# reason: a power calculation is only as honest as its inputs, and inputs
+# buried in a function body cannot be argued with. Every number here is either
+# MEASURED (provenance says where) or ASSUMED (provenance says so, and the
+# audit prints it as an assumption).
+#
+# Changing this file changes which gates are allowed to carry a claim. It does
+# NOT change model_version — it is a statement about evidence, not about the
+# model.
+
+alpha: 0.05           # two-sided
+power_floor: 0.50     # below this a gate is descriptive_only (§21.5)
+equivalence_margin_frac: 0.5   # TOST bound as a fraction of the expected effect
+
+gates:
+
+  - id: ndcg_at_84_vs_adp
+    description: >
+      NDCG@84 of the projection ordering versus the ADP ordering, paired by
+      season. The primary claim the project makes: the engine ranks the
+      draftable pool better than the market.
+    unit: season
+    n_nominal: 8                # 2018-2025 backtest seasons
+    cluster_size: 1             # seasons are the independent unit
+    intra_cluster_rho: 0.0
+    expected_effect: 0.030      # NDCG points
+    sd: 0.022
+    sd_provenance: assumed
+    effect_provenance: assumed
+    notes: >
+      Both numbers are placeholders until run_benchmark.py emits per-season
+      NDCG. The audit reads a measured spread from the benchmark artifact when
+      one exists and overrides these, reporting which it used.
+
+  - id: ndcg_at_36_vs_adp
+    description: >
+      NDCG@36 — the first three rounds, where a pick is worth the most and
+      where ADP is hardest to beat.
+    unit: season
+    n_nominal: 8
+    cluster_size: 1
+    intra_cluster_rho: 0.0
+    expected_effect: 0.025
+    sd: 0.028
+    sd_provenance: assumed
+    effect_provenance: assumed
+
+  - id: expected_dollars_vs_adp_bots
+    description: >
+      E[$] of the engine's seat against eleven ADP-following bots, over
+      independent simulated drafts.
+    unit: simulated_draft
+    n_nominal: 200
+    cluster_size: 12            # twelve seats share one draft's board draws
+    intra_cluster_rho: 0.35
+    expected_effect: 4.00       # dollars over the $32.00 baseline
+    sd: 41.0
+    sd_provenance: measured
+    effect_provenance: assumed
+    notes: >
+      sd is the cross-seat SD of E[$] measured by scripts/simulate.py on the
+      live 2026 board (seat spread $4.96-$107.00 at 512 reps). The expected
+      effect is a guess and is the weakest input in this table.
+
+  - id: quantile_coverage_by_bucket
+    description: >
+      Per-bucket P10/P90 coverage of the calibrated projection intervals.
+      Nominal 80% central coverage.
+    unit: player_season_in_bucket
+    n_nominal: 140              # a typical bucket
+    cluster_size: 1
+    intra_cluster_rho: 0.0
+    expected_effect: 0.03       # deviation from nominal worth detecting
+    sd: 0.40                    # Bernoulli(0.8) sd = 0.40
+    sd_provenance: measured
+    effect_provenance: assumed
+
+  - id: objective_backtest_weekly_high
+    description: >
+      §21.6: realized frequency of "my roster was weekly high" against the
+      simulator's predictive interval, across backtest seasons.
+    unit: season
+    n_nominal: 8
+    cluster_size: 14            # weeks within a season are not independent
+    intra_cluster_rho: 0.10
+    expected_effect: 0.030
+    sd: 0.075
+    sd_provenance: assumed
+    effect_provenance: assumed
+    notes: >
+      §21.6 already records this as thin for a tail statistic. The audit is
+      expected to confirm that in numbers rather than in prose.
+
+  - id: opponent_model_pick_change_rate
+    description: >
+      Fraction of recorded draft states where swapping the survival curve
+      changes the tier-2 VONA recommendation (§14.2 gate, threshold 0.05).
+    unit: draft_state
+    n_nominal: 200
+    cluster_size: 15            # states sampled from the same mock draft
+    intra_cluster_rho: 0.25
+    expected_effect: 0.050
+    sd: 0.218                   # Bernoulli(0.05) sd
+    sd_provenance: measured
+    effect_provenance: assumed
+
+  - id: reliability_spearman_at_84
+    description: >
+      §21.4: Spearman of the top-84 ordering across independent refits.
+    unit: draft_state
+    n_nominal: 200
+    cluster_size: 15
+    intra_cluster_rho: 0.25
+    expected_effect: 0.050      # departure from the predicted 0.85
+    sd: 0.120
+    sd_provenance: assumed
+    effect_provenance: assumed

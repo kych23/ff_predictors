@@ -1,0 +1,30 @@
+# Manual identity overrides — the §11.4 `manual` cascade tier.
+#
+# THIS FILE IS THE DRAFT-NIGHT ESCAPE HATCH. When the room drafts someone the
+# cascade cannot resolve, add a line here and the cockpit picks it up without
+# a rebuild, a refit, or a restart. That is its whole purpose: at pick 4 with
+# eleven people waiting, editing code is not an option and losing the pick is
+# not either.
+#
+# Keys are "Name|POSITION". The position is part of the key because name
+# collisions across positions are common enough in the NFL that name alone
+# produces wrong joins — and a wrong join is worse than an unresolved row,
+# because it is never reported.
+#
+# Names are normalized on load (casefold, accents and punctuation stripped,
+# generational suffixes folded), so write them the natural way. All of these
+# resolve to the same key:
+#
+#     "Marvin Harrison Jr.|WR"
+#     "marvin harrison|WR"
+#     "Marvin Harrison III|WR"
+#
+# Values are nflverse `player_id` (gsis id, e.g. 00-0039337).
+#
+# A `manual` entry outranks the deterministic and fuzzy tiers and is trusted
+# without a confirm card. That is a deliberate grant of authority to whoever
+# typed it — do not paste ids you have not checked.
+
+overrides: {}
+  # Example — a receiver whose FFC name and nflverse name disagree:
+  # "Hollywood Brown|WR": 00-0035662

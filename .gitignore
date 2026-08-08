@@ -1,6 +1,5 @@
 __pycache__/
 
-notebooks/
 .ipynb_checkpoints
 
 profile_default/
@@ -10,9 +9,18 @@ ipython_config.py
 
 .env
 .env.backup
+.env.local
+.env.*.local
 .venv
 env/
 venv/
+
+# Private keys and certs. The mkcert local-dev certs these were added for went
+# with the v1 web frontend; the rules stay as a standing guard against ever
+# committing key material.
+*.pem
+*.key
+*.crt
 
 .vscode/
 .idea/
@@ -23,26 +31,23 @@ venv/
 Thumbs.db
 
 # Models and Data
-models/
+# Anchored to the repo root: an unanchored `models/` also matches src/models/,
+# which is the L3 layer package (DraftEngineDesign.md §9.0) and must be tracked.
+/models/
 *.pkl
 # local HTTP cache (FFC/CFBD) — regenerable, not source
 data/
 
 .agents/
-# ignore .claude contents but keep skills tracked (a dir-level ignore would
-# block the negation — git never descends into fully-ignored directories)
 .claude/*
-!.claude/skills/
 CLAUDE.md
 .pytest_cache/
 
-# live-draft save files (event log per draft)
-draft_state_*.json
-
-DrafterSpec.md
-
 notes/
-# web frontend
+
+# Yahoo OAuth token cache (probe + live client)
+.yahoo_token.json
+
+# web cockpit frontend
 web/node_modules/
-web/.next/
-web/.env.local
+web/dist/

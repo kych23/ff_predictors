@@ -1,0 +1,57 @@
+# Measured slot correlation matrix (DraftEngineDesign.md §13.0, §13.3).
+#
+# This is a CHECKED-IN COPY OF MEASURED DATA, not a derivation from published
+# constants. Earlier revisions derived fallback loadings from a published
+# QB-WR1 correlation through a units conversion and got the units wrong twice;
+# a measured matrix has no conversion to get wrong.
+#
+# Source: nflreadpy.load_player_stats, 2012-2025 regular season, scored through
+# config/league.v2.yaml (full PPR). Players assigned to slots by rank of total
+# points within (season, team, position). Estimated pairwise-complete: only
+# 2,642 team-games have all seven offensive slots populated, while pairwise n
+# runs 5,500-6,200, so listwise deletion would discard ~55% of the data and
+# bias toward healthy, fully-rostered teams.
+#
+# Minimum eigenvalue 0.341 -> comfortably positive definite, Cholesky succeeds,
+# no shrinkage required.
+#
+# WHY NO LATENT FACTOR: a one-factor model forces corr(WR1,WR2) = lambda_WR^2.
+# Satisfying the measured 0.037 gives lambda_WR = 0.19, and then
+# corr(QB1,WR1) = 0.370 requires lambda_QB = 1.92 > 1. The factor model is
+# infeasible here, not merely inaccurate. The mechanism is physical: a QB's
+# yardage is the SUM of his receivers', so he correlates with each of them
+# while they cannibalize one another. One factor expresses one effect or the
+# other, never both.
+
+measured_at: "2026-08-04"
+seasons: [2012, 2025]
+scoring: full_ppr
+min_eigenvalue: 0.341
+
+slots: [QB1, RB1, RB2, WR1, WR2, WR3, TE1]
+
+# Symmetric; diagonal is 1.0.
+matrix:
+  QB1: { QB1: 1.000, RB1: 0.087, RB2: 0.019, WR1: 0.370, WR2: 0.342, WR3: 0.229, TE1: 0.310 }
+  RB1: { QB1: 0.087, RB1: 1.000, RB2: -0.139, WR1: 0.003, WR2: -0.018, WR3: -0.052, TE1: -0.031 }
+  RB2: { QB1: 0.019, RB1: -0.139, RB2: 1.000, WR1: -0.022, WR2: -0.066, WR3: -0.059, TE1: -0.011 }
+  WR1: { QB1: 0.370, RB1: 0.003, RB2: -0.022, WR1: 1.000, WR2: 0.037, WR3: 0.001, TE1: -0.016 }
+  WR2: { QB1: 0.342, RB1: -0.018, RB2: -0.066, WR1: 0.037, WR2: 1.000, WR3: 0.039, TE1: -0.052 }
+  WR3: { QB1: 0.229, RB1: -0.052, RB2: -0.059, WR1: 0.001, WR2: 0.039, WR3: 1.000, TE1: -0.000 }
+  TE1: { QB1: 0.310, RB1: -0.031, RB2: -0.011, WR1: -0.016, WR2: -0.052, WR3: -0.000, TE1: 1.000 }
+
+# DST couples to the OPPOSING offense, not its own team, so it is a cross-block
+# rather than a row of the matrix above. Defined once as
+# corr(DST fantasy points, opposing offense) and therefore expected NEGATIVE.
+# Measured against opponent points actually scored, n = 7,054 team-weeks.
+dst_opponent_coupling: -0.691
+
+# Measured marginals, for reference and for the K/DST empirical draws (§12.5).
+marginals:
+  dst: { mean: 6.44, sd: 5.63, n: 7054 }
+  kicker: { mean: 8.05, sd: 4.47, n: 7357 }
+  weekly_sigma_by_position: # draftable universe, player-seasons >= 8 games
+    QB: 7.45
+    RB: 7.27
+    WR: 7.38
+    TE: 6.04
