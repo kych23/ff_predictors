@@ -32,7 +32,12 @@ from src.app.web import schemas
 from src.app.web import service as svc
 from src.app.web.resolve import AMBIGUOUS
 from src.app.web.service import (
-    CockpitService, RunInFlight, SessionExists, ERROR, READY, RUNNING,
+    ERROR,
+    READY,
+    RUNNING,
+    CockpitService,
+    RunInFlight,
+    SessionExists,
 )
 from src.app.web.sources.base import DraftEvent
 from src.core.errors import ConfigError, DataError
@@ -45,6 +50,26 @@ KEEPALIVE_SECONDS = 15.0
 # so nothing failed, and the built frontend was simply never served.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 DIST = _REPO_ROOT / "web" / "dist"
+
+
+class BoardCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    seed_method: str | None = None
+    tier_size: int | None = Field(None, ge=2, le=50)
+    scopes: dict | None = None
+
+
+class BoardPutRequest(BaseModel):
+    expected_rev: int = Field(ge=1)
+    scopes: dict
+    name: str | None = Field(None, min_length=1, max_length=80)
+
+
+class SeedRequest(BaseModel):
+    scope: str
+    method: str
+    expected_rev: int = Field(ge=1)
+    tier_size: int | None = Field(None, ge=2, le=50)
 
 
 class SessionRequest(BaseModel):
@@ -84,6 +109,32 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(
             f"{exc}. Build the bundle first: "
             f"venv/bin/python scripts/build_bundle.py --season 2026") from exc
+    # "My Board" — research state, no session required, never on the pick
+    # clock. Loaded here so the parquet reads and the one manifest write in
+    # `rankings_csv.load` happen at startup rather than per request.
+    from src.app.rankings.data import RankingsData
+    from src.app.rankings.store import RankingsStore
+
+    service = app.state.service
+    app.state.rankings = RankingsStore(
+        service.web_cfg.resolved(service.web_cfg.rankings_dir))
+    try:
+        app.state.rankings_data = RankingsData.load(
+            service.cfg, service.strategy, service.web_cfg,
+            service.board.players, service.board.snapshot_id,
+            root=service.web_cfg.resolved(Path("data/artifacts")))
+    except Exception:                                      # noqa: BLE001
+        # A malformed rankings export or a truncated parquet must never take
+        # the cockpit down on draft night. `board=` is REQUIRED: it is an
+        # argument rather than a loaded artifact, so it cannot be what failed,
+        # and dropping it would report every player on a saved board as stale.
+        logger.exception("rankings data unavailable; serving degraded")
+        app.state.rankings_data = RankingsData.empty(
+            board=service.board.players)
+
+    app.state.rankings.render = lambda board: schemas.board_payload(
+        board, app.state.rankings_data)
+
     app.state.poller = asyncio.create_task(_poll_loop(app))
     try:
         yield
@@ -285,7 +336,7 @@ async def stream():
                 try:
                     frame = await asyncio.wait_for(queue.get(),
                                                    timeout=KEEPALIVE_SECONDS)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield {"event": "ping", "data": "{}"}
                     continue
                 import json as _json
@@ -432,6 +483,214 @@ async def _poll_loop(application: FastAPI) -> None:
             await asyncio.sleep(backoff)
             continue
         await asyncio.sleep(interval)
+
+
+# --------------------------------------------------------------- rankings
+# "My Board": the user's own tier rankings. Standalone by design — nothing here
+# reaches a recommendation, so no route below may import from the decision path.
+#
+# EVERY ROUTE IN THIS SECTION MUST STAY ABOVE THE STATIC MOUNT BELOW.
+# `Mount("/")` matches every path and Starlette takes the first match in
+# registration order, so a route added after it silently 404s wherever
+# `web/dist` exists — which is a built laptop, not CI.
+# `test_rankings_routes_are_reachable.py` guards this.
+def _rankings(request_app: FastAPI | None = None):
+    store = getattr(request_app or app, "state", None)
+    store = getattr(store, "rankings", None)
+    if store is None:
+        raise HTTPException(503, "rankings store unavailable")
+    return store
+
+
+def _rankings_data(request_app: FastAPI | None = None):
+    data = getattr(request_app or app, "state", None)
+    data = getattr(data, "rankings_data", None)
+    if data is None:
+        raise HTTPException(503, "rankings data unavailable")
+    return data
+
+
+def _rankings_error(exc: Exception) -> HTTPException:
+    from src.app.rankings.store import RevConflict, SlugExists
+
+    if isinstance(exc, SlugExists):
+        return HTTPException(409, str(exc))
+    if isinstance(exc, RevConflict):
+        # `exc.payload` was built inside the worker thread that raised, because
+        # board_payload scans the whole bundle to compute stale ids and this is
+        # the CONFLICT path — it fires exactly when the loop is contended.
+        return HTTPException(409, {
+            "error": "rev_conflict", "board": exc.payload,
+        })
+    return HTTPException(400, str(exc))
+
+
+async def _board_payload(board) -> dict:
+    return await asyncio.to_thread(
+        schemas.board_payload, board, _rankings_data())
+
+
+@app.get("/api/rankings")
+async def list_boards() -> dict:
+    store = _rankings()
+    return {"boards": await asyncio.to_thread(store.list)}
+
+
+@app.post("/api/rankings", status_code=201)
+async def create_board(body: BoardCreateRequest) -> dict:
+    from src.app.rankings import seed as seed_mod
+    from src.app.rankings.schema import RankingsError, empty_scopes, parse
+
+    store, data = _rankings(), _rankings_data()
+    # `is not None`, not truthiness: `scopes={}` is a legitimate "I supplied
+    # scopes" that happens to be empty, and reading it as "no scopes" would
+    # silently seed over the caller's explicit choice.
+    if body.seed_method and body.scopes is not None:
+        raise HTTPException(
+            400, "pass seed_method or scopes, not both")
+
+    def _build():
+        scopes = empty_scopes()
+        seeded: dict[str, Any] = {"bundle_snapshot_id":
+                                  data.snapshots.get("bundle", "")}
+        if body.scopes is not None:
+            parsed = parse({"board_id": "tmp", "name": body.name,
+                            "scopes": body.scopes})
+            scopes = dict(parsed.scopes)
+        elif body.seed_method:
+            # Only `overall` is seeded at creation: it is the scope you start
+            # from, and seeding all seven would do six people's work uninvited.
+            scopes["overall"] = seed_mod.seed_scope(
+                data, "overall", body.seed_method, tier_size=body.tier_size)
+            seeded["method"] = body.seed_method
+        return store.create(body.name, scopes, seeded)
+
+    try:
+        board = await asyncio.to_thread(_build)
+    except RankingsError as exc:
+        raise _rankings_error(exc) from exc
+    return await _board_payload(board)
+
+
+@app.get("/api/rankings/catalogue")
+async def board_catalogue() -> dict:
+    """Every bundle player, so `PlayerRow` can name the ids a board stores.
+
+    Registered before `/api/rankings/{board_id}` — FastAPI matches in order and
+    a path parameter would otherwise swallow the literal `catalogue`.
+    """
+    from src.app.rankings.detail import catalogue
+
+    data = _rankings_data()
+    players = await asyncio.to_thread(catalogue, data)
+    return {"players": players, "target_season": data.target_season,
+            "snapshots": dict(data.snapshots)}
+
+
+@app.get("/api/rankings/{board_id}")
+async def get_ranking_board(board_id: str) -> dict:
+    from src.app.rankings.schema import RankingsError
+
+    store = _rankings()
+    try:
+        board = await asyncio.to_thread(store.load, board_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, f"no board {board_id!r}") from exc
+    except RankingsError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ValueError as exc:
+        # A corrupt file the client cannot influence is a SERVER fault; 422 is
+        # FastAPI's code for request validation and would misdirect the reader.
+        raise HTTPException(500, f"board {board_id!r} is unreadable: {exc}") \
+            from exc
+    return await _board_payload(board)
+
+
+@app.put("/api/rankings/{board_id}")
+async def put_board(board_id: str, body: BoardPutRequest) -> dict:
+    return await _write_board(board_id, body)
+
+
+@app.post("/api/rankings/{board_id}/flush")
+async def flush_board(board_id: str, body: BoardPutRequest) -> dict:
+    """A POST alias for `PUT`, because `beforeunload` cannot issue a PUT with
+    `sendBeacon` and `fetch(keepalive)` is more reliable against a closing tab
+    when the method matches what the browser expects to queue."""
+    return await _write_board(board_id, body)
+
+
+async def _write_board(board_id: str, body: BoardPutRequest) -> dict:
+    from src.app.rankings.schema import RankingsError, parse, to_json
+
+    store = _rankings()
+
+    def _save():
+        current = store.load(board_id)
+        # The client owns `name` and `scopes`; everything else is server-owned,
+        # so a stale or hostile body cannot rewrite provenance or the revision.
+        merged = to_json(current)
+        merged["name"] = body.name or current.name
+        merged["scopes"] = body.scopes
+        return store.save(parse(merged), expected_rev=body.expected_rev)
+
+    try:
+        board = await asyncio.to_thread(_save)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, f"no board {board_id!r}") from exc
+    except RankingsError as exc:
+        raise _rankings_error(exc) from exc
+    return await _board_payload(board)
+
+
+@app.post("/api/rankings/{board_id}/seed")
+async def seed_board(board_id: str, body: SeedRequest) -> dict:
+    from src.app.rankings import seed as seed_mod
+    from src.app.rankings.schema import RankingsError, Scope
+
+    store, data = _rankings(), _rankings_data()
+
+    def _seed():
+        current = store.load(board_id)
+        scope = seed_mod.seed_scope(data, body.scope, body.method,
+                                    tier_size=body.tier_size, board=current)
+        scopes: dict[str, Scope] = {**current.scopes, body.scope: scope}
+        from dataclasses import replace as _replace
+
+        return store.save(_replace(current, scopes=scopes),
+                          expected_rev=body.expected_rev)
+
+    try:
+        board = await asyncio.to_thread(_seed)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, f"no board {board_id!r}") from exc
+    except RankingsError as exc:
+        raise _rankings_error(exc) from exc
+    return await _board_payload(board)
+
+
+@app.delete("/api/rankings/{board_id}")
+async def delete_board(board_id: str) -> dict:
+    from src.app.rankings.schema import RankingsError
+
+    store = _rankings()
+    try:
+        await asyncio.to_thread(store.delete, board_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, f"no board {board_id!r}") from exc
+    except RankingsError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"deleted": True}
+
+
+@app.get("/api/players/{player_id}/detail")
+async def player_detail(player_id: str) -> dict:
+    from src.app.rankings.detail import player_detail as build
+
+    data = _rankings_data()
+    payload = await asyncio.to_thread(build, player_id, data)
+    if payload is None:
+        raise HTTPException(404, f"{player_id!r} is not on the board")
+    return payload
 
 
 # The built frontend, when present. Mounted last so it cannot shadow /api.

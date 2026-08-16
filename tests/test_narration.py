@@ -540,11 +540,15 @@ def test_facts_render_in_their_own_units_not_dollars():
     from src.app.narration.render import NarrationConfig, _readable, assemble
 
     rec, cfg = _facts_record(), NarrationConfig()
-    for subject, unit in (("Breece Hall games", "games"),
-                          ("Breece Hall consistency", "pts/wk"),
-                          ("Breece Hall adp", "ADP")):
+    # The prose must MENTION its own fact — coherence now requires it, so a
+    # placeholder like "x" is correctly rejected before it can be rendered.
+    for subject, unit, prose in (
+            ("Breece Hall games", "games", "Hall is on the field more"),
+            ("Breece Hall consistency", "pts/wk swing",
+             "Hall is steadier week to week"),
+            ("Breece Hall adp", "ADP", "Hall goes earlier by ADP")):
         text = _readable(assemble(
-            [Clause(text="x", subject=subject, quantity="player_fact",
+            [Clause(text=prose, subject=subject, quantity="player_fact",
                     comparator="approx")], rec, cfg.tolerances))
         assert unit in text and "$" not in text
 
@@ -590,10 +594,39 @@ def test_football_guidance_is_absent_when_there_are_no_facts():
 def test_unverifiable_context_is_not_offered():
     """Team changes, target share and depth-chart moves are absent BY DESIGN:
     the bundle has a current team and no history, so the gate could never
-    check them."""
+    check them.
+
+    Asserted as a PROPERTY, not a frozen list. This used to pin the set to
+    exactly {games, consistency, adp}, which made adding `ceiling` and `floor`
+    — both read straight off the calibrated band, both checkable — look like a
+    violation of a rule that is actually about verifiability.
+    """
+    from src.app.narration.attribution import PLAYER_FACTS
+    from src.app.narration.verify import FACT_VOCABULARY
+
+    forbidden = {"team_change", "new_team", "target_share", "depth_chart",
+                 "holdout", "coaching", "snap_share", "trade"}
+    assert not (set(PLAYER_FACTS) & forbidden)
+
+    # Every offered fact must have a coherence rule, or the gate cannot tell
+    # whether a sentence about it matches its own number.
+    assert set(PLAYER_FACTS) <= set(FACT_VOCABULARY), (
+        f"no coherence vocabulary for "
+        f"{set(PLAYER_FACTS) - set(FACT_VOCABULARY)}")
+
+
+def test_every_offered_fact_is_produced_by_the_cockpit():
+    """A fact in the vocabulary that nothing populates is a subject the model
+    may name and the gate will then reject — the `survival_probabilities`
+    failure in a different costume."""
+    import inspect
+
+    from src.app.cockpit.build import _player_facts
     from src.app.narration.attribution import PLAYER_FACTS
 
-    assert set(PLAYER_FACTS) == {"games", "consistency", "adp"}
+    source = inspect.getsource(_player_facts)
+    for fact in PLAYER_FACTS:
+        assert f'facts["{fact}"]' in source, f"{fact} is never populated"
 
 
 # ------------------------------------------ text/subject coherence (§18)
@@ -654,3 +687,113 @@ def test_an_incoherent_clause_is_dropped_not_rendered():
     ], rec, cfg.tolerances)
     assert "durable" not in text
     assert "edges the title" in text
+
+
+def test_a_player_fact_renders_the_actual_value_not_the_claimed_bound():
+    """A one-player number beside a comparative sentence reads as a
+    contradiction when shown as a bound.
+
+    Observed live: "Nabers is on the field MORE weeks than Bowers (UNDER 13.3
+    games)". Both halves were true — the gate had verified the real 13.2
+    against the claimed bound — but "more" next to "under" is nonsense to
+    read. The record's own figure cannot disagree with the sentence, and it
+    says more than a bound does.
+    """
+    from src.app.narration.backends import Clause
+    from src.app.narration.render import NarrationConfig, _readable, assemble
+
+    rec, cfg = _facts_record(), NarrationConfig()
+    actual = rec.fact_for("Breece Hall games")
+    assert actual is not None
+
+    text = _readable(assemble(
+        [Clause(text="Hall is on the field more weeks", quantity="player_fact",
+                subject="Breece Hall games", comparator="lt")],
+        rec, cfg.tolerances), rec)
+
+    assert f"{actual:.1f} games" in text
+    assert "under" not in text.lower(), "a bound word contradicts 'more'"
+
+
+def test_dollars_and_probabilities_still_show_their_comparator():
+    """Only per-player facts switch to the actual value. A dollar delta is a
+    genuine estimate with a direction worth stating."""
+    from src.app.narration.backends import Clause
+    from src.app.narration.render import NarrationConfig, _readable, assemble
+
+    rec, cfg = _facts_record(), NarrationConfig()
+    text = _readable(assemble(
+        [Clause(text="Hall leads overall", quantity="dollars",
+                subject="total", comparator="gt")], rec, cfg.tolerances), rec)
+    # `assemble` states a BOUND for dollars (2.40 -> "over $2.16"), which is
+    # the honest form for an estimate carrying simulation error. Only
+    # per-player facts switch to the exact figure.
+    assert "$" in text
+    assert "over" in text.lower()
+
+
+def test_rendering_without_a_record_still_works():
+    """`_readable` is called with the record everywhere in production, but it
+    must not become the only way to format text."""
+    from src.app.narration.backends import Clause
+    from src.app.narration.render import NarrationConfig, _readable, assemble
+
+    rec, cfg = _facts_record(), NarrationConfig()
+    text = _readable(assemble(
+        [Clause(text="Hall is on the field more", quantity="player_fact",
+                subject="Breece Hall games", comparator="gt")],
+        rec, cfg.tolerances))
+    assert "games" in text
+
+
+# ------------------------------------------ survival direction (§18)
+def _prob_claim(value):
+    from src.app.narration.verify import Claim
+    return Claim(subject="Nacua", quantity="probability",
+                 comparator="approx", value=str(value))
+
+
+@pytest.mark.parametrize("phrase", [
+    "Nacua will not be there when you pick again",
+    "Nacua won't be there when you pick again, so take him now",
+    "Nacua will be gone by your next turn",
+])
+def test_claiming_a_player_is_gone_at_high_survival_is_rejected(phrase):
+    """The failure both models produced: "Nacua will not be there when you
+    pick again (83%)". The number was right and the sentence said the
+    opposite, and nothing checked that they agreed."""
+    from src.app.narration.verify import check_coherence
+
+    assert check_coherence(phrase, _prob_claim(0.83)) is not None
+
+
+@pytest.mark.parametrize("phrase", [
+    "Nacua will still be there when you pick again",
+    "Nacua is likely to last, so you can wait",
+])
+def test_claiming_a_player_lasts_at_low_survival_is_rejected(phrase):
+    from src.app.narration.verify import check_coherence
+
+    assert check_coherence(phrase, _prob_claim(0.06)) is not None
+
+
+def test_a_correct_survival_claim_passes():
+    """The rule must not simply reject every survival sentence."""
+    from src.app.narration.verify import check_coherence
+
+    gone = "Nacua will not be there when you pick again, so take him now"
+    assert check_coherence(gone, _prob_claim(0.11)) is None
+
+    lasts = "Nacua will still be there when you pick again"
+    assert check_coherence(lasts, _prob_claim(0.88)) is None
+
+
+def test_a_survival_clause_with_no_directional_language_is_left_alone():
+    """Only the direction is checked. A clause that states the probability
+    without asserting a direction has nothing to contradict."""
+    from src.app.narration.verify import check_coherence
+
+    # No fact markers at all — "availability" would trip the `games`
+    # vocabulary, which is the mismatch rule doing its job, not this one.
+    neutral = "Nacua is the name to weigh here"
+    assert check_coherence(neutral, _prob_claim(0.83)) is None

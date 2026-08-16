@@ -506,6 +506,10 @@ class CockpitService:
         status = (self.source.status if self.source is not None
                   else SourceStatus())
         return {
+            # Identifies THIS draft, not the bundle. The client keys per-draft
+            # local state on it (the notes pad), so starting a new draft does
+            # not inherit the last one's scribbles.
+            "session_id": session.session_id,
             "seat": session.my_seat, "teams": self.cfg.teams,
             "rounds": self.cfg.roster.rounds,
             "snapshot_id": self.board.snapshot_id,
@@ -579,11 +583,17 @@ class CockpitService:
         return rec, getattr(tiers.get(0), "record", None)
 
     def payload_for(self, rec, generation: int) -> dict:
+        # `current_pick` drives the confidence score's reach term: a
+        # recommendation 20 picks before the market takes him is a coin flip
+        # by measurement, however sure the simulation is of itself.
+        pick = (self.session.state.pick_number
+                if self.session is not None else None)
         return schemas.recommendation_payload(
             rec, self.players, snapshot_id=self.board.snapshot_id,
             generation=generation, reps=self.web_cfg.engine.reps,
             shortlist=self.shortlist,
-            budget_seconds=self.web_cfg.engine.budget_seconds)
+            budget_seconds=self.web_cfg.engine.budget_seconds,
+            current_pick=pick)
 
     def narrate(self, record):
         from src.app.narration import NarrationConfig

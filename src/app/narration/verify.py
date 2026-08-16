@@ -133,11 +133,37 @@ def find_untagged_numerals(text: str, *, allowed: frozenset[str] = frozenset()
 #: figure, which passed every check because $2.20 really was a prize delta.
 FACT_VOCABULARY: Mapping[str, tuple[str, ...]] = {
     "games": ("durab", "games played", "availab", "stays healthy",
-              "on the field", "misses games", "miss games"),
+              "on the field", "misses games", "miss games", "plays more",
+              "plays fewer", "misses fewer", "misses more"),
     "consistency": ("consisten", "steadi", "steady", "week-to-week",
-                    "week to week", "volatil", "boom"),
-    "adp": ("adp", "draft position"),
+                    "week to week", "volatil", "boom", "swing", "reliab",
+                    "start him without", "set and forget", "predictab"),
+    "adp": ("adp", "draft position", "where the room", "the market"),
+    "ceiling": ("ceiling", "upside", "in his best", "best case", "league-winn",
+                "when it breaks right", "top end"),
+    "floor": ("floor", "worst case", "downside", "when it goes wrong",
+              "bust", "safe"),
 }
+
+#: Survival phrasing, split by what it CLAIMS about the probability.
+#:
+#: The gate checked that the number matched the record and never that the
+#: sentence agreed with it, so "Nacua will not be there when you pick again
+#: (83%)" passed — 83% survival means he almost certainly WILL be. Both a 8B
+#: and a 14B model produced this, which is what marks it as a missing rule
+#: rather than a weak model.
+_GONE_PHRASES = (
+    "will not be there", "won't be there", "wont be there", "will be gone",
+    "won't last", "wont last", "will not last", "gone by", "gone when",
+    "take him now", "unlikely to last", "not going to last",
+)
+_LASTS_PHRASES = (
+    "will still be there", "will be there when", "likely to last",
+    "can wait", "should last", "still available", "safe to wait",
+)
+
+#: Above this a player is more likely than not to survive to the next pick.
+SURVIVAL_MIDPOINT = 0.5
 
 #: A per-player fact is ONE player's number. A clause that says "both" or
 #: "neither" while carrying one attributes a measurement to a player it never
@@ -167,6 +193,32 @@ def check_coherence(prose: str, claim: Claim) -> str | None:
         if hit:
             return (f"clause about {claim.subject!r} says {hit!r}, but the "
                     f"number belongs to one player only")
+
+        # POSITIVE requirement, not merely the absence of a contradiction.
+        # The loop above only fires when the text matches SOME vocabulary and
+        # the subject disagrees; text matching nothing sailed through carrying
+        # an unrelated number. Observed live: "you won't need to worry about
+        # bye weeks (under 33.3 ADP)" — the sentence and the figure are about
+        # different things, and neither the numeric check nor the mismatch
+        # check had anything to say about it.
+        markers = FACT_VOCABULARY.get(kind)
+        if markers and not any(m in lowered for m in markers):
+            return (f"clause carries {claim.subject!r} but the sentence never "
+                    f"mentions {kind} — the number is attached to prose about "
+                    f"something else")
+
+    if claim.quantity == "probability" and claim.numeric is not None:
+        survives = claim.numeric > SURVIVAL_MIDPOINT
+        says_gone = any(m in lowered for m in _GONE_PHRASES)
+        says_lasts = any(m in lowered for m in _LASTS_PHRASES)
+        if says_gone and survives:
+            return (f"clause says the player will not last, but "
+                    f"{claim.subject!r} survives with probability "
+                    f"{claim.numeric:.0%} — the sentence contradicts its "
+                    f"own number")
+        if says_lasts and not survives:
+            return (f"clause says the player will last, but {claim.subject!r} "
+                    f"survives with probability {claim.numeric:.0%}")
     return None
 
 

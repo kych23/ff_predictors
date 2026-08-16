@@ -204,12 +204,18 @@ def test_kdst_become_live_in_the_endgame(league, strategy):
 
 
 def test_position_caps_come_from_strategy(league, strategy):
-    """Caps live in strategy.yaml, so tuning them leaves models valid (§10.1)."""
+    """Caps live in strategy.yaml, so tuning them leaves models valid (§10.1).
+
+    Scored past round 10 on purpose. `early_round_caps` sinks a second QB
+    before then and claims `sink_reason` first, so an earlier pick would test
+    that rule instead of this one — two real caps, and the test has to say
+    which it means.
+    """
     rs = _rs(league)
     cap = int(strategy.max_per_position["QB"])
     for i in range(cap):
         rs.record_pick(f"qb{i}", "QB", mine=True)
-    result = rec_mod.score(_players(), rs, league, strategy, current_pick=45)
+    result = rec_mod.score(_players(), rs, league, strategy, current_pick=133)
     qbs = result.ranked[result.ranked["position"] == "QB"]
     assert (qbs["sink_reason"].str.startswith("at_cap_QB")).all()
 

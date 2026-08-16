@@ -44,6 +44,96 @@ META_COLS = {"player_id", "season", "position", "as_of_date", "name", "team"}
 TARGET = "fppg"
 
 
+def _pbp_aggregates(seasons: list[int], entries: list, cfg) -> dict:
+    """Red zone, routes, team pace and defence, aggregated per season.
+
+    Pulled once and reduced immediately. A decade of full play-by-play is ~370
+    columns and half a million rows; nothing downstream needs a single play, so
+    only the fifteen columns these features read are kept and the rest is
+    dropped before it is ever concatenated.
+
+    Failures degrade to empty rather than stopping the build. Play-by-play is a
+    large pull and a board that cannot be built is worse than one without
+    red-zone features — `prior_production` already emits NaN for them.
+
+    **NOT WIRED INTO `load_frames`, on purpose.** These thirteen features were
+    built, trained and then measured against a model without them, held out,
+    trained on prior seasons only:
+
+        season    n   spearman with   without    MAE with   without
+          2023  377          0.7529    0.7532       2.681     2.679
+          2024  375          0.7969    0.7971       2.568     2.558
+          2025  383          0.8396    0.8347       2.234     2.283
+
+    Mean Spearman delta +0.0015 — noise, and negative in two of three seasons.
+    By position only TE moved (+0.0163); RB/WR/QB were flat. The likely reason
+    is that the model already had the signal: `targets_per_game`,
+    `carries_per_game`, `snap_share` and `expected_fp_per_game` are present for
+    98%+ of the board and red-zone usage correlates strongly with total usage,
+    so these largely re-describe what it could already see. Coverage does not
+    help either — 57% for the red-zone rates, 66% for routes (`participation`
+    is 2018+ only), 35% for red-zone carry share.
+
+    Compare `_college_stats`, which moved rookie Spearman +0.121/+0.022/+0.025
+    and won on both metrics in all three seasons. That is what a feature that
+    works looks like.
+
+    Kept rather than deleted because the pull and the reductions are the
+    expensive part to rewrite, and there are two live reasons to come back:
+    routes gain a season of coverage every year, and `team_environment` /
+    `defence_allowed` belong in the WEEKLY draw rather than as season features,
+    where averaging destroys exactly the week-to-week variation that makes a
+    matchup worth knowing.
+    """
+    from src.models.features import pbp as pbp_mod
+
+    player, team, defence = [], [], []
+    for season in seasons:
+        try:
+            pull = nflverse.fetch("pbp", seasons=[season])
+            entries.append(pull.entry)
+            frame = pull.frame
+        except Exception as exc:                      # noqa: BLE001
+            print(f"      pbp {season}: unavailable ({type(exc).__name__})")
+            continue
+        keep = [c for c in pbp_mod.PBP_COLUMNS if c in frame.columns]
+        frame = frame[keep]
+
+        player.append(pbp_mod.red_zone_opportunity(frame))
+        team.append(pbp_mod.team_environment(frame))
+        defence.append(pbp_mod.defence_allowed(frame, cfg.scoring.offense))
+
+        try:
+            part = nflverse.fetch("participation", seasons=[season])
+            entries.append(part.entry)
+            routes = pbp_mod.routes_run(part.frame, frame)
+            if not routes.empty:
+                player.append(routes)
+        except Exception:                             # noqa: BLE001
+            pass                                       # 2018+ only
+
+    def _stack(parts: list, keys: list[str]):
+        usable = [p for p in parts if p is not None and not p.empty]
+        if not usable:
+            return pd.DataFrame()
+        out = usable[0]
+        for extra in usable[1:]:
+            shared = set(out.columns) & set(extra.columns) - set(keys)
+            if shared:                                 # same shape, new season
+                out = pd.concat([out, extra], ignore_index=True)
+            else:                                      # new columns, same key
+                out = out.merge(extra, on=keys, how="outer")
+        return out
+
+    player_frame = _stack(player, ["player_id", "season"])
+    team_frame = _stack(team, ["team", "season"])
+    defence_frame = _stack(defence, ["team", "season"])
+    print(f"      play-by-play: {len(player_frame):,} player-seasons, "
+          f"{len(team_frame):,} team-seasons")
+    return {"pbp_player": player_frame, "pbp_team": team_frame,
+            "pbp_defence": defence_frame}
+
+
 def _college_stats(seasons: list[int], entries: list) -> pd.DataFrame:
     """CFBD player-season production, or an empty frame if the key is absent.
 
@@ -96,7 +186,8 @@ def _depth_charts(pull, seasons: list[int]) -> pd.DataFrame:
     return combined
 
 
-def load_frames(seasons: list[int], target: int, entries: list) -> tuple[dict, dict]:
+def load_frames(seasons: list[int], target: int, entries: list,
+                cfg) -> tuple[dict, dict]:
     """Pull every source assemble_season reads, recording provenance.
 
     Backward-looking sources stop at ``target - 1``: the target season has not
@@ -135,6 +226,9 @@ def load_frames(seasons: list[int], target: int, entries: list) -> tuple[dict, d
         # draft year. Three seasons covered only 24% of the board.
         "cfb_stats": _college_stats(
             list(range(target - 11, target)), entries),
+        # `_pbp_aggregates(played, entries, cfg)` is DELIBERATELY not spread in
+        # here — see its docstring. Re-wiring it is this one line plus the
+        # `pbp_player=` argument in `assemble_season`.
     }
     return frames, pfr_to_gsis
 
@@ -190,7 +284,7 @@ def main() -> None:
     seasons = list(range(args.start - 1, args.target + 1))
 
     print(f"[1/6] pulling sources {seasons[0]}-{seasons[-1]}...")
-    frames, pfr_to_gsis = load_frames(seasons, args.target, entries)
+    frames, pfr_to_gsis = load_frames(seasons, args.target, entries, cfg)
     print(f"      {len(frames['stats']):,} player-week rows")
 
     print("[2/6] assembling features per season...")

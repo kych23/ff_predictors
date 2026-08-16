@@ -1,14 +1,14 @@
 {
-  "_note": "Regenerated after the CFBD college-production feature block: deflated-then-standardized college stats now feed the projection model. Measured lift on held-out rookie classes: Spearman +0.121/+0.022/+0.025 for 2023/2024/2025, MAE better in all three.",
+  "_note": "pre-draft refresh",
   "budget_s": 60.0,
-  "code_digest": "95fd741c0356",
+  "code_digest": "f21a57366bb4",
   "dollars": {
-    "00-0037840": 44.9112109375,
-    "00-0039064": 36.2734375,
-    "00-0039337": 34.181640625,
-    "00-0039338": 37.9765625,
-    "00-0039361": 41.3505859375,
-    "00-0040715": 37.59130859375
+    "00-0036389": 72.190673828125,
+    "00-0037740": 62.3291015625,
+    "00-0037744": 69.951171875,
+    "00-0039337": 80.7363671875,
+    "00-0039338": 76.7607421875,
+    "00-0040715": 73.10302734375
   },
   "drafted": [
     "00-0039139",
@@ -39,12 +39,12 @@
     "00-0034857",
     "00-0038134"
   ],
-  "leader": "00-0037840",
-  "leader_name": "Kyren Williams",
+  "leader": "00-0039337",
+  "leader_name": "Malik Nabers",
   "reps": 512,
   "seat": 4,
   "shortlist": 6,
-  "snapshot_id": "sn2_4528c4495e21da28eeaff853",
+  "snapshot_id": "sn2_458ef5fc6ba61c759fe113ef",
   "stopped_because": "separated",
   "tier": 0
 }

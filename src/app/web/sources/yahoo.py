@@ -27,10 +27,10 @@ degrades this adapter alone.
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from collections.abc import Mapping
 
 from src.app.web.sources.base import DraftEvent, SourceStatus, _QueueSource
 

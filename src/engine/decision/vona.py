@@ -27,6 +27,14 @@ from .replacement import ReplacementLevels
 from .roster_state import RosterState
 from .survival import survival_probability
 
+#: Two VONA scores closer than this are the same recommendation.
+#:
+#: In points per game, and deliberately small: 0.01 over a 17-week season is
+#: 0.17 points, far inside the projection's own error (rookie MAE is ~3 ppg).
+#: It is meant to catch exact ties and floating-point dust, not to bucket
+#: players the model genuinely separates.
+TIE_EPSILON = 0.01
+
 
 def marginal_value(value: float, position: str, replacement: ReplacementLevels,
                    roster: RosterState) -> float:
@@ -92,4 +100,21 @@ def score_board(
     df["marginal"] = marg.values
     df["wait_term"] = df["position"].map(wait_vor_by_pos).fillna(0.0)
     df["vona_score"] = df["marginal"] - df["wait_term"]
-    return df.sort_values("vona_score", ascending=False)
+
+    # TIES FALL BACK TO THE MARKET, and there are far more ties than there look.
+    # Every defence on the board carries the same fitted mean (6.441) and every
+    # kicker the same (8.052) — 45 of 256 players with literally identical
+    # values, spanning 89 ADP picks. Skill players tie too, at the replacement
+    # floor and wherever the projection cannot separate two profiles.
+    #
+    # Sorting those by score alone left the order to whatever pandas returned,
+    # so the engine would recommend an arbitrary kicker over the one the room
+    # rates 60 picks higher. When the model genuinely has no opinion, the
+    # market's is the best information available — and this is a TIEBREAK, not
+    # a value input: ADP cannot move a player past someone the engine actually
+    # scored higher, so the ADP wall is intact.
+    order = df["vona_score"].to_numpy(dtype=float)
+    df["_band"] = np.round(order / TIE_EPSILON)
+    df = df.sort_values(["_band", "adp"], ascending=[False, True],
+                        kind="stable").drop(columns="_band")
+    return df

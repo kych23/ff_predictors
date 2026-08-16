@@ -57,6 +57,9 @@ def web_cfg(tmp_path):
         source="manual", auto_recommend=False,
         session_path=tmp_path / "session.json",
         ledger_path=tmp_path / "ledger.sqlite",
+        # Without this, any store built from `web_cfg` writes boards into the
+        # real repo tree at data/web/rankings.
+        rankings_dir=tmp_path / "rankings",
         engine=EngineConfig(reps=8, budget_seconds=2.0),
     )
 
@@ -123,3 +126,128 @@ def _fake_recommendation(leader="rb-00", tier=0):
 @pytest.fixture
 def fake_recommendation():
     return _fake_recommendation
+
+
+# ------------------------------------------------------ rankings fixtures
+# `synthetic_players` is deliberately NOT extended with value_p10/value_p90.
+# `recommend._risk_adjusted_value` reads both, so adding them would shift every
+# non-median-alpha round and could change the outcome of every existing test
+# built on `synthetic_board`. The rankings surface gets its own frame instead.
+@pytest.fixture
+def rankings_players(synthetic_players) -> pd.DataFrame:
+    """The synthetic board plus the columns the rankings surface reads.
+
+    K and DST carry NaN bands, mirroring the live bundle where all 47 of them
+    (plus 2 WR) have no calibrated interval. One row carries a null ADP so
+    "nulls sort last" has something to assert against — the live bundle has
+    none, and every synthetic row would otherwise have one.
+    """
+    frame = synthetic_players.copy()
+    frame["value_p10"] = frame["value"] - 3.0
+    frame["value_p90"] = frame["value"] + 3.0
+    unbanded = frame["position"].isin(("K", "DST"))
+    frame.loc[unbanded, ["value_p10", "value_p90"]] = float("nan")
+    frame.loc[unbanded, "coverage"] = "no_prior_season"
+    frame.loc[unbanded, "value_source"] = "kdst_empirical"
+    frame.loc[frame.index[-1], "adp"] = float("nan")
+    return frame.reset_index(drop=True)
+
+
+@pytest.fixture
+def rankings_matrix(rankings_players) -> pd.DataFrame:
+    """One row per QB/RB/WR/TE at the target season — K and DST have none,
+    exactly as in the real matrix. `fppg` is present and null, because it is
+    the training label and the detail endpoint must never serve it."""
+    modeled = rankings_players[
+        rankings_players["position"].isin(("QB", "RB", "WR", "TE"))]
+    rows = []
+    for i, (_, player) in enumerate(modeled.iterrows()):
+        rows.append({
+            "player_id": player["player_id"], "season": 2026,
+            "position": player["position"],
+            "fppg": float("nan"),                    # the label
+            "prior_fppg": 10.0 + i * 0.1,
+            "prior_targets_per_game": 5.0, "prior_target_share": 0.18,
+            "prior_carries_per_game": 3.0, "prior_touches_per_game": 8.0,
+            "prior_snap_share": 0.7, "prior_catch_rate": 0.65,
+            "prior_yards_per_target": 8.1, "prior_yards_per_reception": 12.0,
+            "prior_rec_td_rate": 0.05, "prior_yards_per_carry": 4.3,
+            "prior_rush_td_rate": 0.03, "prior_rush_yards_per_game": 15.0,
+            "prior_pass_attempts_per_game": 30.0, "prior_completion_pct": 0.64,
+            "prior_yards_per_attempt": 7.2, "prior_pass_td_rate": 0.045,
+            "prior_int_rate": 0.02, "prior_sack_rate": 0.06,
+            # float64 with a NaN, like the real column — the bool coercion path
+            "is_projected_starter": float("nan") if i == 1 else 1.0,
+            "depth_chart_rank": 1.0, "same_position_competition": 2.0,
+            "has_depth_data": 1, "vacated_targets": 41.0,
+            "vacated_targets_share": 0.09, "vacated_carries": 12.0,
+            "vacated_carries_share": 0.04,
+            "draft_round": 2.0, "draft_pick_overall": 55.0,
+            "is_undrafted": 0, "draft_capital_score": 0.8,
+            "seasons_of_history": 0 if i == 0 else 3,
+            "team_changed": 0, "age_at_season_start": 24.5,
+            "college_rec_yds_z": 1.4, "college_rec_td_z": 0.9,
+            "college_rush_yds_z": -0.2, "college_rush_td_z": 0.1,
+            "college_scrimmage_yds_z": 1.1, "college_conference_tier": 3.0,
+            "has_college_stats": 1 if i == 0 else 0,
+            "team_ctx_implied_pts": 23.4, "team_ctx_game_total": 46.5,
+            "team_ctx_spread": -1.5,
+        })
+    frame = pd.DataFrame(rows)
+    return frame.set_index("player_id", drop=False)
+
+
+@pytest.fixture
+def rankings_tiers(rankings_players) -> pd.DataFrame:
+    """Per-position tiers, `rank` restarting at 1 per position — the shape the
+    real artifact has, and the reason `engine_tiers` cannot seed `overall`."""
+    rows = []
+    for position, group in rankings_players.groupby("position"):
+        ordered = group.sort_values("value", ascending=False)
+        for rank, (_, player) in enumerate(ordered.iterrows(), 1):
+            rows.append({
+                "player_id": player["player_id"],
+                "player_name": player["player_name"], "position": position,
+                "tier": 1 if position in ("K", "DST") else min(
+                    (rank - 1) // 3 + 1, 3),
+                "rank": rank, "adp": player["adp"],
+            })
+    return pd.DataFrame(rows)
+
+
+@pytest.fixture
+def rankings_ranks(rankings_players) -> pd.DataFrame:
+    """A market export covering most of the board, so the miss path is live."""
+    from src.core.names import normalize_name
+
+    covered = rankings_players.iloc[: int(len(rankings_players) * 0.8)]
+    rows = [{
+        "player_name": player["player_name"],
+        "match_key": normalize_name(str(player["player_name"])),
+        "position": player["position"], "team": player["team"],
+        "consensus_rank": float(i + 1) + 0.5,     # genuinely fractional
+        "rank_spread": 5, "rank_sd": 2.0, "n_platforms": 6,
+        "rank_yahoo": i + 1, "rank_espn": i + 2, "rank_sleeper": i + 1,
+        "rank_underdog": i + 3, "rank_cbs": i + 1, "rank_ffpc": i + 2,
+    } for i, (_, player) in enumerate(covered.iterrows())]
+    return pd.DataFrame(rows).set_index("match_key", drop=False)
+
+
+@pytest.fixture
+def rankings_data(rankings_players, rankings_matrix, rankings_tiers,
+                  rankings_ranks):
+    from src.app.rankings.data import RankingsData, _match_keys, _replacement
+
+    return RankingsData(
+        board=rankings_players, matrix=rankings_matrix, ranks=rankings_ranks,
+        tiers=rankings_tiers, replacement=_replacement(rankings_players),
+        match_keys=_match_keys(rankings_players), target_season=2026,
+        snapshots={"bundle": SNAPSHOT, "matrix": "sn2_m", "tiers": "sn2_t"},
+    )
+
+
+@pytest.fixture
+def rankings_store(web_cfg):
+    from src.app.rankings.store import RankingsStore
+
+    return RankingsStore(web_cfg.rankings_dir)

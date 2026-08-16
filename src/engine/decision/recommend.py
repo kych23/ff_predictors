@@ -27,8 +27,8 @@ import pandas as pd
 from src.core.config.league import LeagueConfig
 from src.core.config.strategy import StrategyConfig
 from src.core.constants import EMPIRICAL_POSITIONS
+from src.engine.decision import quantile_schedule, roster_state, vona
 from src.engine.decision import replacement as replacement_mod
-from src.engine.decision import roster_state, vona
 
 #: Penalty applied to a position the roster has filled to its cap, and to K/DST
 #: before the last rounds. Large enough to sink them below any real candidate
@@ -47,6 +47,33 @@ class Recommendation:
     @property
     def leader(self) -> pd.Series | None:
         return None if self.ranked.empty else self.ranked.iloc[0]
+
+
+def _risk_adjusted_value(available: pd.DataFrame, strategy: StrategyConfig,
+                         current_round: int, value_col: str) -> pd.Series:
+    """A player's value at the round's target quantile of his own band.
+
+    Falls back to the median for anyone without a calibrated band — K and DST
+    carry one fitted mean apiece, and a floored player has no distribution to
+    read. Inventing a spread for them would manufacture upside out of nothing.
+    """
+    median = pd.to_numeric(available[value_col], errors="coerce")
+    lo, hi = "value_p10", "value_p90"
+    if lo not in available.columns or hi not in available.columns:
+        return median
+
+    alpha = strategy.alpha_for_round(current_round)
+    if alpha == 0.5:
+        return median
+
+    p10 = pd.to_numeric(available[lo], errors="coerce")
+    p90 = pd.to_numeric(available[hi], errors="coerce")
+    usable = p10.notna() & p90.notna() & (p90 > p10)
+    shifted = pd.Series(
+        quantile_schedule.value_vector_at_alpha(
+            p10.fillna(median), median, p90.fillna(median), alpha),
+        index=available.index)
+    return median.where(~usable, shifted)
 
 
 def kdst_rounds_remaining(rs: roster_state.RosterState, league: LeagueConfig) -> int:
@@ -90,17 +117,45 @@ def score(
     Defaults to ``available`` only so existing single-board callers keep
     working; every live path passes the preseason board.
     """
+    # From the pick the CALLER named, not `rs.my_current_round()`. That
+    # property counts `rs.drafted` — the whole room's picks in production, but
+    # only my own in a caller that tracks just my roster. Two notions of "what
+    # round is it" that agree live and diverge anywhere else.
+    current_round = (current_pick - 1) // league.teams + 1
+
+    # Replacement is measured on the SAME quantile the candidates are scored
+    # on. Ranking players at their P25 against a bar computed from P50s prices
+    # value-over-replacement against the wrong bar — measured as scores
+    # drifting up to 0.04 apart and reordering near-ties, because the
+    # `max(0, .)` clamps in `vona` start biting at a level the values never
+    # reach.
+    structural = (available if preseason_board is None else preseason_board)
     levels = replacement_mod.compute_replacement(
-        available if preseason_board is None else preseason_board,
+        structural.assign(**{value_col: _risk_adjusted_value(
+            structural, strategy, current_round, value_col)}),
         cfg=league, value_col=value_col,
     )
     # correction 1: the horizon is my NEXT turn, strictly after this one
     next_pick = rs.next_my_pick(after_overall=current_pick)
 
+    # RISK APPETITE. Rank on a round-appropriate quantile of the calibrated
+    # band rather than always on the median. Early rounds lean on the floor
+    # (a round-2 bust is unrecoverable); the middle leans on the ceiling, where
+    # upside is cheap and a miss costs a bench slot.
+    #
+    # Applied HERE and not in tier 0 on purpose. Tier 0 draws the whole
+    # distribution and prices it in dollars, so it already knows what variance
+    # is worth under this payout; shifting its quantiles too would count risk
+    # appetite twice. What this changes is which candidates tier 0 is handed —
+    # and a player who never reaches the shortlist is never simulated.
+    scored_on = _risk_adjusted_value(available, strategy, current_round,
+                                     value_col)
     scored = vona.score_board(
-        available, rs, levels, next_pick=next_pick, value_col=value_col
+        available.assign(**{value_col: scored_on}), rs, levels,
+        next_pick=next_pick, value_col=value_col,
     )
-    scored = _apply_roster_shaping(scored, rs, league, strategy)
+    scored = _apply_roster_shaping(scored, rs, league, strategy,
+                                   current_round=current_round)
     scored = scored.sort_values("vona_score", ascending=False).reset_index(drop=True)
     return Recommendation(
         ranked=scored, next_pick=next_pick, current_pick=current_pick,
@@ -110,7 +165,8 @@ def score(
 
 def _apply_roster_shaping(
     scored: pd.DataFrame, rs: roster_state.RosterState,
-    league: LeagueConfig, strategy: StrategyConfig,
+    league: LeagueConfig, strategy: StrategyConfig, *,
+    current_round: int,
 ) -> pd.DataFrame:
     if scored.empty:
         return scored
@@ -131,7 +187,6 @@ def _apply_roster_shaping(
     # The objective prices that thinly, but thinly is not never — a
     # high-variance TE2 can still take a shortlist place off upside alone, and
     # a shortlist place is what buys entry to the expensive simulation.
-    current_round = rs.my_current_round()
     for position, rule in strategy.early_round_caps.items():
         through = int(rule.get("through_round", 0))
         limit = int(rule.get("max", 0))

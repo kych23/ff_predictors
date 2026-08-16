@@ -171,3 +171,40 @@ def test_an_archive_id_is_matched_against_the_listing_not_joined(tmp_path):
         svc.resolve_archive(cfg, "../../../etc/passwd")
     with pytest.raises(DataError, match="no archived draft"):
         svc.resolve_archive(cfg, "session.999.bak")
+
+
+# ------------------------------------------- the draft's identity reaches the UI
+def test_the_session_payload_carries_the_draft_identity():
+    """The notes pad keys its localStorage on `session_id`. Falling back to
+    `snapshot_id` would be wrong in the way that is hardest to notice: every
+    draft run against one bundle shares it, so a new draft would open holding
+    the previous draft's notes."""
+    import inspect
+
+    source = inspect.getsource(svc.CockpitService.session_payload)
+    assert '"session_id": session.session_id' in source
+    assert '"snapshot_id"' in source, "both are carried; they mean different things"
+
+
+def test_session_id_is_stable_across_a_reload(tmp_path):
+    """The pad has to survive a refresh, which means the key has to survive a
+    reload of the log."""
+    from src.app.cockpit.session import Session
+
+    path = tmp_path / "session.json"
+    first = Session(my_seat=0, teams=12, rounds=15, snapshot_id="sn2_t",
+                    path=path)
+    first.record_pick("a", seat=0, raw_input="Alpha")
+    first.save()
+
+    reloaded = Session.load(path)
+    assert reloaded.session_id == first.session_id
+    assert reloaded.session_id
+
+
+def test_two_drafts_get_different_identities(tmp_path):
+    from src.app.cockpit.session import Session
+
+    a = Session(my_seat=0, teams=12, rounds=15, path=tmp_path / "a.json")
+    b = Session(my_seat=0, teams=12, rounds=15, path=tmp_path / "b.json")
+    assert a.session_id != b.session_id

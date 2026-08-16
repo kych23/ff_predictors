@@ -32,7 +32,7 @@ QUANTITIES = ("dollars", "probability", "player_fact", "week", "slot")
 #: CURRENT team and no history, so "moved to a new team" is not checkable —
 #: and an unverifiable clause is exactly what the gate exists to stop. Adding
 #: those means adding the data first, not loosening the prompt.
-PLAYER_FACTS = ("games", "consistency", "adp")
+PLAYER_FACTS = ("games", "consistency", "adp", "ceiling", "floor")
 
 
 @dataclass(frozen=True)

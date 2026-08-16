@@ -30,7 +30,7 @@ def test_the_strategy_hash_is_pinned():
     rebuild the bundle and update the literal — or a transport setting leaked
     into the hashed config."""
     strategy = load_strategy(load_league())
-    assert strategy.strategy_hash == "09e4cf71e67b", (
+    assert strategy.strategy_hash == "6f3621663282", (
         f"strategy_hash moved to {strategy.strategy_hash}; every RNG seed and "
         f"the bundle's decision_version just changed")
 
@@ -68,6 +68,22 @@ def test_relative_paths_anchor_to_the_repo_root():
     resolved = cfg.resolved(cfg.session_path)
     assert resolved.is_absolute()
     assert str(resolved).startswith(str(ROOT))
+
+
+def test_rankings_dir_is_read_from_the_yaml(tmp_path):
+    """`load_web` builds `WebConfig` field by field and silently drops unknown
+    keys, so adding the dataclass field alone ships an INERT setting: the yaml
+    would be ignored and the default would always win. This pins both halves.
+    """
+    path = tmp_path / "web.yaml"
+    path.write_text("rankings_dir: data/elsewhere/boards\n")
+    assert load_web(path).rankings_dir == Path("data/elsewhere/boards")
+
+
+def test_the_rankings_dir_anchors_to_the_repo_root():
+    """Boards must not land wherever uvicorn happened to be launched from."""
+    cfg = load_web()
+    assert cfg.resolved(cfg.rankings_dir).is_absolute()
 
 
 def test_an_unknown_source_is_rejected(tmp_path):

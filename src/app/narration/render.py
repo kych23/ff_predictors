@@ -36,7 +36,18 @@ from src.app.narration.verify import (
 logger = logging.getLogger(__name__)
 
 #: Units for the football facts, so a durability claim does not print dollars.
-_FACT_UNITS = {"games": " games", "consistency": " pts/wk", "adp": " ADP"}
+#: How each fact is spelled next to its number. `consistency` is a weekly
+#: standard deviation, and labelling it " pts/wk" made praise read as an
+#: insult: "Flowers' steadiness means you can start him without checking
+#: (under 9.5 pts/wk)" parses as "he scores under 9.5 a week". Naming the
+#: quantity as a SWING fixes the sentence without touching the model.
+_FACT_UNITS = {
+    "games": " games",
+    "consistency": " pts/wk swing",
+    "adp": " ADP",
+    "ceiling": " pts/g upside",
+    "floor": " pts/g floor",
+}
 
 
 
@@ -44,8 +55,14 @@ _FACT_UNITS = {"games": " games", "consistency": " pts/wk", "adp": " ADP"}
 class NarrationConfig:
     enabled: bool = True
     #: Model id for whichever backend resolves. Local ids look like
-    #: "qwen2.5:7b"; hosted ones like "claude-opus-5".
-    model: str = "qwen2.5:7b"
+    #: "qwen2.5:14b"; hosted ones like "claude-opus-5".
+    #:
+    #: 14b, not 7b. Under the coherence gate the 7b benchmarks at 75% and is
+    #: reported NOT usable — the table would show most of the time. The 14b
+    #: passes 85% and writes three distinct clauses to the 7b's 1.6. It costs
+    #: ~11 s against ~4 s, which is free: narration is its own SSE event and
+    #: never sits on the pick clock.
+    model: str = "qwen2.5:14b"
     max_tokens: int = 400
     gate_on_entailment: bool = True
     on_gate_fail: str = "render_table"
@@ -226,7 +243,7 @@ def narrate(record: AttributionRecord, cfg: NarrationConfig, *,
         return Narration(
             render_table(record), "table",
             reason="no narration backend available (start Ollama with "
-                   "`ollama serve` and `ollama pull qwen2.5:7b`, or set "
+                   "`ollama serve` and `ollama pull qwen2.5:14b`, or set "
                    "ANTHROPIC_API_KEY)")
 
     start = time.perf_counter()
@@ -265,11 +282,11 @@ def narrate(record: AttributionRecord, cfg: NarrationConfig, *,
                          reason="failed the entailment gate", model=cfg.model,
                          latency_ms=elapsed)
 
-    return Narration(_readable(text), backend.name, gate_result=result,
+    return Narration(_readable(text, record), backend.name, gate_result=result,
                      model=cfg.model, latency_ms=elapsed)
 
 
-def _readable(text: str) -> str:
+def _readable(text: str, record=None) -> str:
     """Replace each verified claim span with its value, formatted for a human.
 
     Runs AFTER the gate, so formatting here cannot affect verification — the
@@ -299,6 +316,20 @@ def _readable(text: str) -> str:
             # production week to week less than $0.82" — the right subject
             # wearing the wrong unit, which reads as nonsense.
             unit = _FACT_UNITS.get(subject.rsplit(" ", 1)[-1].lower(), "")
+
+            # Show the player's ACTUAL value, not the bound the model claimed.
+            # A one-player fact next to a comparative sentence reads as a
+            # contradiction otherwise: "Nabers is on the field MORE weeks than
+            # Bowers (UNDER 13.3 games)". Both halves were true — the gate had
+            # verified 13.2 < 13.3 — but "more" beside "under" is nonsense to
+            # read. The true figure cannot disagree with the sentence, and it
+            # is strictly more informative than a bound.
+            #
+            # Safe only because this runs AFTER the gate. Substituting before
+            # it would have the gate check the record against itself.
+            actual = record.fact_for(subject) if record is not None else None
+            if actual is not None:
+                return f"({actual:.1f}{unit})"
             shown = f"{value:.1f}{unit}"
         else:
             return raw

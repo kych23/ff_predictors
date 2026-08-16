@@ -77,6 +77,8 @@ def main() -> None:
 
     t0 = time.perf_counter()
     team_week = kernel.evaluate_rosters(points, masks)
+    team_week = kernel.apply_starter_substitution(
+        points, masks, team_week, rosters, proj, cfg, strategy)
     team_week = kernel.apply_waiver_floor(points, masks, team_week, rosters,
                                           proj, cfg, strategy)
     t_eval = time.perf_counter() - t0

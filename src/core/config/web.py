@@ -57,6 +57,10 @@ class WebConfig:
     pick_clock_seconds: int = 60
     session_path: Path = Path("data/web/session.json")
     ledger_path: Path = Path("data/web/ledger.sqlite")
+    #: Where "My Board" custom tier rankings are stored, one JSON document per
+    #: board. Research state, not draft state — nothing here reaches a
+    #: recommendation, which is why it belongs in web.yaml.
+    rankings_dir: Path = Path("data/web/rankings")
     #: Draft-order team names, seat 0 first. Short blanks fall back to
     #: "Team N" — a placeholder that looks like one beats a wrong name
     #: that looks right.
@@ -121,6 +125,7 @@ def load_web(path: Path | None = None) -> WebConfig:
         pick_clock_seconds=int(raw.get("pick_clock_seconds", 60)),
         session_path=Path(raw.get("session_path", "data/web/session.json")),
         ledger_path=Path(raw.get("ledger_path", "data/web/ledger.sqlite")),
+        rankings_dir=Path(raw.get("rankings_dir", "data/web/rankings")),
         team_names=tuple(str(n) for n in (raw.get('team_names') or [])),
         engine=EngineConfig(reps=reps, budget_seconds=budget),
         yahoo=YahooWebConfig(

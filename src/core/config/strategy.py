@@ -57,6 +57,13 @@ class AdpConfig:
     teams: int
     min_ranking: int
     min_fullsim: int
+    #: Which platform column to read when `source` is `rankings_csv`. The
+    #: league drafts on ONE platform and its board is the one the eleven
+    #: opponents actually see; a composite market is a different board.
+    platform: str = "yahoo"
+    #: Path to the static export. Replaced by the Yahoo API when permission
+    #: arrives, which is why `source` is a switch rather than a rewrite.
+    rankings_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -92,6 +99,7 @@ class SimulationConfig:
     correlation: Mapping[str, Any]
     rollout: Mapping[str, Any]
     waiver: Mapping[str, Any]
+    starter_substitution: Mapping[str, Any]
     decision: Mapping[str, Any]
     narration: Mapping[str, Any]
 
@@ -116,6 +124,23 @@ class StrategyConfig:
     @property
     def max_per_position(self) -> Mapping[str, int]:
         return self.roster_preferences.get("max_per_position", {})
+
+    @property
+    def risk_schedule(self) -> tuple[Mapping[str, float], ...]:
+        """Round-banded target quantile for shortlist ranking, first match wins."""
+        raw = self.roster_preferences.get("risk_schedule", []) or []
+        return tuple(dict(band) for band in raw)
+
+    def alpha_for_round(self, draft_round: int, default: float = 0.5) -> float:
+        """Which quantile of the calibrated band ranks players in this round.
+
+        Absent config returns the median, i.e. today's behaviour — a missing
+        schedule must not silently become a risk preference.
+        """
+        for band in self.risk_schedule:
+            if int(draft_round) <= int(band.get("through_round", 0)):
+                return float(band.get("alpha", default))
+        return default
 
     @property
     def early_round_caps(self) -> Mapping[str, Mapping[str, int]]:
@@ -287,6 +312,8 @@ def load_strategy(league: LeagueConfig, path: str | None = None) -> StrategyConf
         source=str(adp_raw["source"]),
         format=str(adp_raw["format"]),
         teams=int(adp_raw.get("teams") or league.teams),  # rule 16
+        platform=str(adp_raw.get("platform", "yahoo")),
+        rankings_path=str(adp_raw.get("rankings_path", "") or ""),
         min_ranking=int(adp_raw["min_ranking"]),
         min_fullsim=int(adp_raw["min_fullsim"] or league.teams * rounds),
     )
@@ -330,6 +357,7 @@ def load_strategy(league: LeagueConfig, path: str | None = None) -> StrategyConf
             correlation=sim_raw["correlation"],
             rollout=sim_raw["rollout"],
             waiver=sim_raw["waiver"],
+            starter_substitution=sim_raw.get("starter_substitution", {}),
             decision=sim_raw["decision"],
             narration=sim_raw["narration"],
         ),

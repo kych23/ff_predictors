@@ -44,7 +44,28 @@ adp:
   # 12-team PPR, 15 rounds) and 2021-2024 carry full stdev. 2025 returns
   # status="Error" and is a genuine gap. Yahoo is blocked pending Fantasy
   # Sports API permission, so FFC is PRIMARY, not a fallback (§11.5.1).
-  source: ffc # ffc | yahoo_current
+  # ffc | rankings_csv | yahoo_current
+  #
+  # The league drafts on YAHOO, and the eleven opponents pick off Yahoo's
+  # board — not off FFC's composite mock-draft market. Compared rank-to-rank
+  # on the 2026 board the two agree closely early (Spearman 0.92, mean 6.6
+  # ranks apart over the first five rounds) and diverge later: Tucker Kraft is
+  # FFC 113 and Yahoo 71, so an engine reading FFC expects him to last 42
+  # picks longer than he will.
+  #
+  # `rankings_csv` takes the ORDER from the platform column and the pick
+  # SPACING from FFC, because the export carries ranks and a survival curve
+  # needs pick positions. Set `ffc` to revert; `yahoo_current` when the API
+  # opens.
+  source: rankings_csv
+  platform: yahoo
+  # Exported from https://flockfantasy.com/rankings?format=year — the consensus
+  # table with one column per platform. `Expert` is deliberately dropped on load
+  # (ADP wall): it is an opinion about what SHOULD happen, and the survival
+  # curve models what WILL. Re-export closer to draft night and repoint this;
+  # nothing else reads the filename, and `build_bundle` warns and falls back to
+  # FFC if the path is wrong rather than failing loudly.
+  rankings_path: data/ppr_overall_3d_08152026.csv
   format: ppr
   teams: 12
   min_ranking: 100
@@ -63,8 +84,32 @@ roster_preferences:
   # The objective already prices that thinly, but "thinly" is not "never", and
   # a high-variance TE2 can still win a shortlist slot in round 5 off upside
   # alone. Through round 8 the answer is simply no.
+  # RISK APPETITE BY ROUND. Which quantile of a player's calibrated band is
+  # used to rank him for the shortlist — 0.25 leans on his floor, 0.80 on his
+  # ceiling. This does NOT change the simulation: tier 0 always prices the full
+  # distribution in dollars. It changes which candidates the simulation is
+  # given, which is where "who would I even consider here" is decided.
+  #
+  # Rounds 1-3 buy starters you cannot afford to miss on, so they are ranked by
+  # floor: a bust in round 2 is unrecoverable in a way a bust in round 7 is
+  # not. The middle rounds are where upside is cheap — rookies, breakout
+  # candidates, bounce-backs — so they are ranked by ceiling. Late rounds ease
+  # back toward the median for the bench mix, where a steady contributor beats
+  # a lottery ticket you will cut in week 3.
+  #
+  # First matching `through_round` wins.
+  risk_schedule:
+    - { through_round: 3, alpha: 0.25 }
+    - { through_round: 10, alpha: 0.80 }
+    - { through_round: 99, alpha: 0.60 }
+
   early_round_caps:
     TE: { max: 1, through_round: 8 }
+    # QB: one starting slot and no flex eligibility at all, so a second
+    # quarterback cannot reach the lineup in any week — he is pure bench until
+    # the starter misses time. Measured on this roster: a 2nd QB starts 1 week
+    # in 17. Through round 10 the answer is no.
+    QB: { max: 1, through_round: 10 }
 
 yahoo:
   league_key: null # discovered by scripts/spikes/probe_yahoo.py
@@ -170,6 +215,18 @@ simulation:
   rollout:
     horizon: end_of_draft # end_of_draft | rounds:<N>
     my_future_picks: vona_heuristic
+  # Start the next man up when a chosen starter is drawn inactive.
+  #
+  # The mask picks the lineup on the availability HAZARD, so a 70%-available
+  # starter is chosen on 70% of his rate — but the drawn `active` indicator
+  # never reached it. Measured: 22.5% of chosen-starter player-weeks draw at
+  # zero, and mean team-week ran ~20% low with the roster playing a man short.
+  #
+  # Unlike the waiver correction this is vectorized (14 ms against ~450 ms), so
+  # it runs on the pick clock. Set false to reproduce pre-substitution numbers.
+  starter_substitution:
+    enabled: true
+
   waiver:
     enabled: true
     # Whether the correction also runs inside the LIVE pick clock.
@@ -208,7 +265,10 @@ simulation:
     #   auto  -> local if Ollama is up, else hosted if a key is set, else table
     #   table -> deterministic, no model at all; always a legitimate choice
     backend: auto
-    model: qwen2.5:7b # `ollama pull qwen2.5:7b`; claude-opus-5 for anthropic
+    # 7b benchmarks NOT usable under the coherence gate (75%, 1.6 clauses);
+    # 14b passes at 85% with 3.0. The extra ~7 s never touches the pick clock —
+    # narration is a separate SSE event. `venv/bin/python scripts/bench_narration.py`
+    model: qwen2.5:14b # `ollama pull qwen2.5:14b`; claude-opus-5 for anthropic
     max_tokens: 400
     gate_on_entailment: true
     tolerances: { dollars: 0.05, probability: 0.02, week: 0, slot: 0 }

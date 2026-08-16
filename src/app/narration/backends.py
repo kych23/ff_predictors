@@ -40,7 +40,7 @@ from src.app.narration.attribution import AttributionRecord
 logger = logging.getLogger(__name__)
 
 OLLAMA_URL = "http://127.0.0.1:11434"
-DEFAULT_LOCAL_MODEL = "qwen2.5:7b"
+DEFAULT_LOCAL_MODEL = "qwen2.5:14b"
 
 #: How many claim-bearing clauses a narration may contain. Past roughly this
 #: many the model stops explaining and starts restating the table — every
@@ -105,9 +105,20 @@ sentence is too thin to be worth reading over the table.
 
 Available football facts, per player:
   - `<player> games`        how much of the season he is on the field
-  - `<player> consistency`  week-to-week swing; LOWER is steadier, more startable
+  - `<player> consistency`  week-to-week SWING; LOWER is steadier, more startable
+  - `<player> ceiling`      his upside case, points per game
+  - `<player> floor`        what he returns when it goes wrong
   - `<player> adp`          where the room is taking him
-  - `<player>` (a name alone) how likely he is to last until your next pick
+  - `<player>` (a name alone) how likely he is to LAST until your next pick
+
+Use a DIFFERENT fact in each clause. Four clauses about consistency is one
+clause repeated four times, and the reader has already stopped. `ceiling` and
+`floor` are the axis worth reaching for — upside against safety is the argument
+fantasy drafters actually have, and it is the one `games` cannot make.
+
+For "he will not be there if you wait", use the player's NAME as the subject
+(survival), never `adp`. ADP is where the room drafts him on average; survival
+is the probability he lasts to YOUR pick, which is the thing you are deciding.
 
 RULES that get a clause thrown away, so follow them exactly:
   - A football fact belongs to ONE player. NAME HIM. Never "both", "neither", \

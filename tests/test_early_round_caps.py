@@ -48,9 +48,49 @@ def _score_at(round_no, league, strategy, board, held_positions):
                        preseason_board=board).ranked
 
 
-def test_the_rule_is_configured_not_hardcoded(strategy):
-    rule = strategy.early_round_caps.get("TE")
-    assert rule == {"max": 1, "through_round": 8}
+def test_the_rules_are_configured_not_hardcoded(strategy):
+    assert strategy.early_round_caps.get("TE") == {"max": 1, "through_round": 8}
+    assert strategy.early_round_caps.get("QB") == {"max": 1, "through_round": 10}
+
+
+@pytest.mark.parametrize("round_no", [1, 4, 7, 10])
+def test_no_second_qb_is_offered_before_round_eleven(round_no, league,
+                                                     strategy, board):
+    """A second quarterback is worse than a second tight end: QB is not
+    flex-eligible at all, so he cannot reach the lineup in ANY week — he is
+    pure bench until the starter misses time. Measured on this roster, a
+    2nd QB starts 1 week in 17."""
+    ranked = _score_at(round_no, league, strategy, board, ["QB"])
+    live = ranked[ranked["sink_reason"] == ""]
+    assert not (live["position"] == "QB").any(), (
+        f"a second QB reached the live board in round {round_no}")
+    assert ranked[ranked["position"] == "QB"].iloc[0]["sink_reason"] == \
+        "QB_max_1_through_round_10"
+
+
+@pytest.mark.parametrize("round_no", [11, 14])
+def test_a_second_qb_is_allowed_once_the_cap_expires(round_no, league,
+                                                     strategy, board):
+    ranked = _score_at(round_no, league, strategy, board, ["QB"])
+    live = ranked[ranked["sink_reason"] == ""]
+    assert (live["position"] == "QB").any()
+
+
+def test_the_first_qb_is_never_blocked(league, strategy, board):
+    """QB has a mandatory starting slot. Blocking the first one would leave a
+    roster that cannot field a legal lineup."""
+    ranked = _score_at(4, league, strategy, board, ["RB", "WR"])
+    live = ranked[ranked["sink_reason"] == ""]
+    assert (live["position"] == "QB").any()
+
+
+def test_the_two_caps_expire_independently(league, strategy, board):
+    """TE frees at 9, QB at 11. A single shared threshold would be simpler and
+    wrong — the positions differ in whether FLEX can ever start the backup."""
+    ranked = _score_at(9, league, strategy, board, ["TE", "QB"])
+    live = ranked[ranked["sink_reason"] == ""]
+    assert (live["position"] == "TE").any(), "TE cap should have expired"
+    assert not (live["position"] == "QB").any(), "QB cap should still hold"
 
 
 @pytest.mark.parametrize("round_no", [1, 3, 5, 8])
@@ -136,4 +176,4 @@ def test_the_config_change_is_reflected_in_the_decision_version(strategy):
     hash in test_web_config.py moved with it. Models stay valid; only the
     decision layer is affected (§10.1)."""
     assert strategy.decision_version.startswith("dec_v2.")
-    assert strategy.strategy_hash == "09e4cf71e67b"
+    assert strategy.strategy_hash == "6f3621663282"

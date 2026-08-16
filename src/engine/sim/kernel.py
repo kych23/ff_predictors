@@ -142,6 +142,102 @@ def apply_waiver_floor(points: np.ndarray, masks: np.ndarray,
     ).team_week
 
 
+#: Which starters a bench player may cover. Substitution is bounded by what
+#: could legally take the slot: a quarterback cannot cover a receiver, but the
+#: flex positions cover each other because FLEX already lets them.
+def _substitution_groups(cfg) -> list[frozenset[str]]:
+    flex = frozenset(cfg.roster.flex_eligible)
+    singles = [frozenset({p}) for p in cfg.roster.slots
+               if p not in flex and p != "BENCH"]
+    return [flex, *singles]
+
+
+def apply_starter_substitution(points: np.ndarray, masks: np.ndarray,
+                               team_week: np.ndarray,
+                               rosters: list[np.ndarray], bundle,
+                               cfg, strategy=None) -> np.ndarray:
+    """Start the next man up when a chosen starter is drawn inactive.
+
+    **The largest measured error in the objective.** `build_masks` picks the
+    lineup from projections times the availability HAZARD, so a 70%-available
+    starter is chosen on 70% of his rate — but the drawn `active` indicator
+    never reaches the mask. When a replication draws him out he contributes an
+    exact zero and the roster plays a man short, which no manager does.
+
+    Measured on the shipped bundle (12 ADP rosters, 200 replications, 17
+    weeks): **22.5% of chosen-starter player-weeks draw at zero**, and mean
+    team-week came out near 73 against about 85 if the lineup may see realized
+    availability. Roughly a 15% understatement, and it does not cancel for
+    bench depth — which is exactly what the late rounds are priced on.
+
+    **This is not clairvoyance.** §15.3 forbids selecting on realized POINTS;
+    who is active is known before kickoff from the injury report, and starting
+    your backup when the starter is out is the most ordinary thing in fantasy.
+    The substitute's SCORE is still whatever he drew.
+
+    Vectorized rather than looped over replications, which is what makes it
+    affordable on a pick clock — the waiver correction is off in the decision
+    path precisely because its claim loop is sequential.
+    """
+    if strategy is not None:
+        gate = getattr(strategy.simulation, "starter_substitution", None) or {}
+        if not gate.get("enabled", False):
+            return team_week
+
+    n_teams, weeks, _ = masks.shape
+    positions = np.asarray(bundle.positions)
+    groups = _substitution_groups(cfg)
+    corrected = team_week.copy()
+
+    for team in range(n_teams):
+        roster = np.asarray(rosters[team], dtype=int)
+        if roster.size == 0:
+            continue
+        for week in range(weeks):
+            starting = masks[team, week, roster] > 0
+            starters = roster[starting]
+            bench = roster[~starting]
+            if starters.size == 0 or bench.size == 0:
+                continue
+
+            for group in groups:
+                in_group = np.isin(positions[starters], list(group))
+                bench_in_group = np.isin(positions[bench], list(group))
+                if not in_group.any() or not bench_in_group.any():
+                    continue
+
+                # A starter drawn at exactly zero is out — inactive or on bye.
+                # Both are cases where the manager starts someone else.
+                out = points[starters[in_group], week, :] == 0.0
+                missing = out.sum(axis=0)
+                if not missing.any():
+                    continue
+
+                # The substitute is chosen by PROJECTION, never by what he
+                # went on to score. Ranking the bench by drawn points would be
+                # clairvoyance in its purest form — picking the man who
+                # happened to have a good week — and §15.3 forbids exactly
+                # that. Who is ACTIVE is fair game; it is on the injury report
+                # before kickoff. What he scores is not.
+                candidates = bench[bench_in_group]
+                order = np.argsort(
+                    -selection_values(bundle, candidates, week), kind="stable")
+                ranked = candidates[order]
+
+                drawn = points[ranked, week, :]
+                active = drawn != 0.0
+
+                # Walk the projection order and take the first `missing`
+                # ACTIVE players. `rank_among_active` is 1-based position in
+                # that walk, so the test is simply "am I within the number of
+                # slots that opened".
+                rank_among_active = np.cumsum(active, axis=0)
+                used = active & (rank_among_active <= missing[None, :])
+                gained = (drawn * used).sum(axis=0)
+                corrected[team, week, :] += gained.astype(corrected.dtype)
+    return corrected
+
+
 def evaluate_rosters(points: np.ndarray, masks: np.ndarray) -> np.ndarray:
     """(T, W, R) team-week totals from (P, W, R) points and (T, W, P) masks."""
     n_teams, weeks, _ = masks.shape

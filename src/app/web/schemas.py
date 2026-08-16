@@ -26,6 +26,7 @@ from typing import Any
 
 import pandas as pd
 
+from src.engine.decision import confidence
 from src.engine.decision.recommendation import Recommendation
 
 
@@ -121,7 +122,8 @@ def _fallback_candidates(rec: Recommendation, lookup: dict) -> list[dict]:
 def recommendation_payload(rec: Recommendation, board: pd.DataFrame, *,
                            snapshot_id: str, generation: int,
                            reps: int, shortlist: int,
-                           budget_seconds: float) -> dict:
+                           budget_seconds: float,
+                           current_pick: int | None = None) -> dict:
     """The `rec_ready` body. Narration is attached later, never inline.
 
     `engine` is stamped in because `reps` and `budget_seconds` are
@@ -144,10 +146,25 @@ def recommendation_payload(rec: Recommendation, board: pd.DataFrame, *,
             "vona_score": None, "in_indifference_set": True,
         })
 
+    leader_row = next((c for c in candidates
+                       if c["player_id"] == leader), None)
+    conf = confidence.score(
+        tier=int(rec.tier),
+        p_best=rec.p_best,
+        stopped_because=rec.stopped_because,
+        adp=(leader_row or {}).get("adp"),
+        current_pick=current_pick,
+        indifference_size=len(rec.indifference_set),
+        has_projection=bool((leader_row or {}).get("e_dollars") is not None),
+        stale_flags=tuple(rec.stale_flags),
+    )
+
     return {
         "snapshot_id": snapshot_id,
         "generation": generation,
         "tier": int(rec.tier),
+        "confidence": {"score": conf.score, "label": conf.label,
+                       "drivers": conf.drivers},
         "leader": leader,
         "leader_name": rec.leader_name,
         "elapsed_s": _json_float(rec.elapsed_s),
@@ -185,3 +202,25 @@ def ledger_recommendation(payload: dict) -> dict:
     refusing it.
     """
     return {k: v for k, v in payload.items() if k != "candidates"}
+
+
+def board_payload(board, data) -> dict:
+    """A rankings board, plus which of its players the current bundle lost.
+
+    `stale_player_ids` rides on EVERY board-returning response, not just `GET`.
+    The client swaps the response straight into state, so attaching it only to
+    the initial read would make the greyed rows vanish on the first save — a
+    board would appear to heal itself and then not.
+
+    Staleness is set membership against the live bundle and nothing else. An
+    earlier design compared the board's recorded snapshot to the training
+    matrix's; snapshot ids are per artifact family, so that comparison would
+    have been false on every board ever saved.
+    """
+    from src.app.rankings.schema import to_json
+
+    payload = to_json(board)
+    known = set(data.board["player_id"].astype(str)) if not data.board.empty \
+        else set()
+    payload["stale_player_ids"] = sorted(board.player_ids() - known)
+    return payload

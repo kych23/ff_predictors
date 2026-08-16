@@ -43,6 +43,18 @@ from src.app.narration.render import (  # noqa: E402
 PRIZES = ("champion", "weekly_high", "season_points")
 
 
+def _facts(rng) -> dict:
+    """One player's verifiable facts, matching `cockpit.build._player_facts`."""
+    median = float(rng.uniform(6, 18))
+    return {
+        "games": round(float(rng.uniform(12, 17)), 1),
+        "consistency": round(float(rng.uniform(3, 9)), 1),
+        "adp": round(float(rng.uniform(1, 60)), 1),
+        "ceiling": round(median + float(rng.uniform(2, 7)), 1),
+        "floor": round(max(median - float(rng.uniform(2, 6)), 0.5), 1),
+    }
+
+
 def synthetic_records(n: int, seed: int = 0) -> list[AttributionRecord]:
     """Records spanning the shapes a real draft produces.
 
@@ -84,13 +96,13 @@ def synthetic_records(n: int, seed: int = 0) -> list[AttributionRecord]:
             # must NOT push a football framing — without facts the enum offers
             # only money, and football words on a dollar figure read worse
             # than the money framing they replaced.
+            # Every fact the cockpit actually supplies. The fixture used to
+            # stop at games/consistency/adp, so the benchmark measured a
+            # narrower vocabulary than production had — and reported a model
+            # as "usable" on material it would never see.
             player_facts={} if i % 4 == 1 else {
-                f"p{a}": {"games": round(float(rng.uniform(12, 17)), 1),
-                          "consistency": round(float(rng.uniform(3, 9)), 1),
-                          "adp": round(float(rng.uniform(1, 60)), 1)},
-                f"p{b}": {"games": round(float(rng.uniform(12, 17)), 1),
-                          "consistency": round(float(rng.uniform(3, 9)), 1),
-                          "adp": round(float(rng.uniform(1, 60)), 1)},
+                f"p{a}": _facts(rng),
+                f"p{b}": _facts(rng),
             },
         ))
     return out
@@ -127,7 +139,7 @@ def run(backend, records, cfg) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--n", type=int, default=20)
-    ap.add_argument("--model", default="qwen2.5:7b")
+    ap.add_argument("--model", default="qwen2.5:14b")
     ap.add_argument("--anthropic-model", default="claude-opus-5")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()

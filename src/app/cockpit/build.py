@@ -61,6 +61,8 @@ def _player_facts(rows: list[str], proj, frame, pid_of: dict) -> dict:
     * `games`        expected games from the fitted availability hazard
     * `consistency`  weekly sigma — LOWER is steadier, stated that way in the prompt
     * `adp`          market draft position
+    * `ceiling`      calibrated P90 of the season rate — the upside case
+    * `floor`        calibrated P10 — what he returns when it goes wrong
 
     Not included, and not an oversight: team changes, target share, depth-chart
     moves. The bundle carries a current team and no history, so none of it is
@@ -73,6 +75,12 @@ def _player_facts(rows: list[str], proj, frame, pid_of: dict) -> dict:
         try:
             facts["games"] = round(float(proj.games_hazard[i].sum()), 1)
             facts["consistency"] = round(float(proj.weekly_sigma[i]), 1)
+            # Ceiling and floor come straight off the calibrated band. They
+            # add the axis fantasy players actually argue about — upside
+            # against safety — which `games` and `consistency` cannot express,
+            # and a narrator with three facts and four clauses repeats itself.
+            facts["ceiling"] = round(float(proj.rate_p90[i]), 1)
+            facts["floor"] = round(float(proj.rate_p10[i]), 1)
         except Exception:                  # noqa: BLE001 — never cost a pick
             pass
         adp = frame.at[i, "adp"] if "adp" in frame.columns else None
@@ -312,6 +320,12 @@ def build_tiers(board: Board, cfg, strategy, slot: int, reps: int,
             masks = kernel.build_masks(proj, res.rosters, plan, weeks)
             points = points_for(draw)
             team_week = kernel.evaluate_rosters(points, masks)
+            # Start the next man up before anything reads the totals. A
+            # roster that plays a man short every time a starter is drawn
+            # out understates by ~20%, and worst for bench depth — which is
+            # exactly what the late rounds are priced on.
+            team_week = kernel.apply_starter_substitution(
+                points, masks, team_week, res.rosters, proj, cfg, strategy)
             team_week = kernel.apply_waiver_floor(points, masks, team_week,
                                                   res.rosters, proj, cfg,
                                                   strategy,

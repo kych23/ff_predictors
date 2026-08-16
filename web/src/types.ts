@@ -27,6 +27,7 @@ export interface Recommendation {
   snapshot_id: string;
   generation: number;
   tier: number;
+  confidence: ConfidenceScore | null;
   leader: string | null;
   leader_name: string | null;
   elapsed_s: number | null;
@@ -56,6 +57,9 @@ export interface RosterSlot {
 }
 
 export interface SessionState {
+  /** This draft's identity — distinct from `snapshot_id`, which names the
+   *  bundle and is shared by every draft run against it. */
+  session_id: string;
   seat: number;
   teams: number;
   rounds: number;
@@ -111,6 +115,13 @@ export interface ReplayOption {
   readable: boolean;
 }
 
+/** How much the engine backs this pick, 0-100, plus why it is not higher. */
+export interface ConfidenceScore {
+  score: number;
+  label: "strong" | "moderate" | "slight" | "coin flip";
+  drivers: string[];
+}
+
 export interface DraftPick {
   pick_number: number;
   round: number;
@@ -120,4 +131,66 @@ export interface DraftPick {
   position: string | null;
   resolved: boolean;
   is_mine: boolean;
+}
+
+// ------------------------------------------------------------- My Board
+// The board document mirrors `src/app/rankings/schema.py`. `Tier`, `Scope`
+// and `Board` are re-exported from `rankings/model.ts`, which owns the
+// mutations; these are the API-shaped types the client sends and receives.
+export type { Board, Scope, ScopeName, Tier, TierColor } from "./rankings/model";
+
+export interface BoardSummary {
+  board_id: string;
+  name: string;
+  updated_at: string;
+  rev: number;
+  counts: Record<string, number>;
+}
+
+/** One row of `/api/rankings/catalogue` — what `PlayerRow` renders.
+ *
+ * A board stores only player ids, and `/api/board` cannot supply this: it
+ * omits `value` and it filters out drafted players, so rows would vanish from
+ * a research board mid-draft. */
+export interface CataloguePlayer {
+  player_id: string;
+  name: string;
+  position: string;
+  team: string | null;
+  bye_week: number | null;
+  value: number | null;
+  vor: number | null;
+  adp: number | null;
+}
+
+export interface PlayerDetail {
+  player_id: string;
+  name: string;
+  position: string;
+  team: string | null;
+  bye_week: number | null;
+  projection: {
+    value: number | null;
+    vor: number | null;
+    p10: number | null;
+    p90: number | null;
+    source: string;
+    coverage: string;
+  };
+  market: {
+    adp: number | null;
+    adp_stdev: number | null;
+    matched: boolean;
+    consensus_rank: number | null;
+    rank_spread: number | null;
+    ranks: Record<string, number>;
+  };
+  // Null as a whole for every K and DST — they have no training-matrix row.
+  production: Record<string, number | null> | null;
+  role: Record<string, number | boolean | null> | null;
+  capital: Record<string, number | boolean | null> | null;
+  college: Record<string, number | boolean | null> | null;
+  team_context: Record<string, number | null> | null;
+  engine_position_tier: number | null;
+  has_matrix_row: boolean;
 }

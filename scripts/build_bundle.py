@@ -25,12 +25,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.config import load_league, load_strategy  # noqa: E402
 from src.core.constants import REPLACEMENT_FLOOR_QUANTILE  # noqa: E402
+from src.core.names import normalize_name  # noqa: E402
 from src.domain.scoring.engine import score_offense  # noqa: E402
 from src.engine.decision.tiers import build_tier_table, write_tiers  # noqa: E402
 from src.models.artifacts import newest, newest_all  # noqa: E402
 from src.platform import bundle as bundle_mod  # noqa: E402
 from src.platform.identity.match import match_by_name  # noqa: E402
-from src.platform.sources import ffc, nflverse  # noqa: E402
+from src.platform.sources import (  # noqa: E402
+    ffc,
+    nflverse,
+    rankings_csv,  # noqa: E402
+)
 from src.platform.store.manifest import (  # noqa: E402
     build_snapshot,
     utc_now,
@@ -173,6 +178,69 @@ def _optional(src: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(src[column], errors="coerce")
 
 
+def _apply_platform_ranking(adp: pd.DataFrame, strategy, entries: list
+                            ) -> pd.DataFrame:
+    """Re-price the market using ONE platform's board.
+
+    The league drafts on a single platform, so that platform's ordering is the
+    one the eleven opponents pick from. FFC is a composite of mock drafts
+    across the industry — a good consensus and the wrong board.
+
+    Order comes from the export, spacing from FFC. `adp_stdev` is widened to at
+    least the platforms' own disagreement: a player Yahoo ranks 60th and CBS
+    ranks 100th has an uncertain draft position however tight any single market
+    looks on him.
+
+    Unmatched players keep their FFC price rather than being dropped. A player
+    the export missed is still draftable, and §19 is explicit that an unpriced
+    player must stay on the board.
+    """
+    path = Path(strategy.adp.rankings_path)
+    if not strategy.adp.rankings_path or not path.exists():
+        print(f"      WARNING: adp.rankings_path {str(path)!r} not found — "
+              f"falling back to FFC prices for every player")
+        return adp
+
+    pull = rankings_csv.load(path)
+    entries.append(pull.entry)
+    ranks = pull.frame
+    column = f"rank_{strategy.adp.platform.lower()}"
+    if column not in ranks.columns:
+        available = [c for c in ranks.columns if c.startswith("rank_")]
+        raise SystemExit(
+            f"adp.platform={strategy.adp.platform!r} has no column in "
+            f"{path.name}; available: {sorted(available)}")
+
+    out = adp.copy()
+    out["match_key"] = out["player_name"].map(normalize_name)
+    merged = out.merge(
+        ranks[["match_key", column, "rank_spread", "rank_sd"]],
+        on="match_key", how="left")
+
+    priced = rankings_csv.to_pick_positions(merged[column], merged["adp"])
+    matched = priced.notna()
+
+    # The platforms' disagreement, expressed in PICK units so it can be
+    # compared with a market standard deviation at all. Ranks and picks are
+    # different scales, and averaging them directly would be meaningless.
+    spread_lo = rankings_csv.to_pick_positions(
+        merged[column] - merged["rank_sd"].fillna(0), merged["adp"])
+    spread_hi = rankings_csv.to_pick_positions(
+        merged[column] + merged["rank_sd"].fillna(0), merged["adp"])
+    disagreement = (spread_hi - spread_lo).abs() / 2.0
+
+    merged.loc[matched, "adp"] = priced[matched]
+    merged["adp_stdev"] = np.maximum(
+        pd.to_numeric(merged["adp_stdev"], errors="coerce"),
+        disagreement.fillna(0.0))
+
+    n = int(matched.sum())
+    print(f"      {strategy.adp.platform} board applied to {n}/{len(merged)} "
+          f"priced players ({100 * n / max(len(merged), 1):.0f}%); "
+          f"the rest keep FFC")
+    return merged.drop(columns=["match_key", column, "rank_spread", "rank_sd"])
+
+
 def build(season: int, out: Path) -> bundle_mod.Bundle:
     league = load_league()
     strategy = load_strategy(league)
@@ -217,17 +285,22 @@ def build(season: int, out: Path) -> bundle_mod.Bundle:
               f"(no projection artifact; run train_projection_v2.py)")
 
     print(f"[2/4] {strategy.adp.source.upper()} ADP for {season}...")
-    if strategy.adp.source != "ffc":
+    if strategy.adp.source not in ("ffc", "rankings_csv"):
         raise SystemExit(
             f"adp.source={strategy.adp.source!r} is not available; Yahoo is "
             f"blocked pending Fantasy Sports API permission (§11.5). "
-            f"Set adp.source: ffc in config/strategy.yaml."
+            f"Set adp.source: ffc or rankings_csv in config/strategy.yaml."
         )
+    # FFC is pulled EITHER WAY. Under `rankings_csv` it supplies the pick
+    # spacing and the within-market standard deviation; the platform export
+    # carries ranks, and ranks have no gaps.
     adp_pull = ffc.fetch_adp(fmt=strategy.adp.format, teams=strategy.adp.teams,
                              season=season)
     entries.append(adp_pull.entry)
     adp = adp_pull.frame
     print(f"      {len(adp)} players priced")
+    if strategy.adp.source == "rankings_csv":
+        adp = _apply_platform_ranking(adp, strategy, entries)
 
     print("[3/4] resolving ADP names against nflverse...")
     report = match_by_name(adp, values, left_name="player_name",

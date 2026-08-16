@@ -55,6 +55,11 @@ team_names:
 session_path: data/web/session.json
 ledger_path: data/web/ledger.sqlite
 
+# "My Board" custom tier rankings, one JSON document per board. Research state:
+# the engine never reads these, so a board can say anything without touching a
+# recommendation.
+rankings_dir: data/web/rankings
+
 engine:
   # Decision-affecting, and machine-dependent, so it cannot live inside the
   # hashed config. Instead both values are stamped into the ledger entry and

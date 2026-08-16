@@ -224,7 +224,12 @@ def build_projection_bundle(board: pd.DataFrame, cfg, weeks: int,
     rebuilds.
     """
     key = (
-        id(covariate_loader), str(artifacts_dir), int(weeks), int(season),
+        # The loader OBJECT, not `id(...)`. CPython reuses ids after garbage
+        # collection, so a stubbed loader in one test could be handed the
+        # bundle built by a real one in another — which showed up as a
+        # order-dependent failure that passed in isolation. Holding the
+        # reference also keeps the identity stable for as long as it is a key.
+        covariate_loader, str(artifacts_dir), int(weeks), int(season),
         len(board),
         # Board contents, not just length: a resolved name can change a row
         # in place without changing the row count.

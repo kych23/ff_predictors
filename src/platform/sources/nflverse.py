@@ -37,12 +37,18 @@ ASSET_LOADERS: Final[dict[str, str]] = {
     "snap_counts": "load_snap_counts",
     "ff_opportunity": "load_ff_opportunity",
     "ff_playerids": "load_ff_playerids",
+    # Play-by-play and on-field participation: red-zone opportunity,
+    # routes run, team pace and defence allowed. Large pulls, so both
+    # are fetched per season and reduced immediately.
+    "pbp": "load_pbp",
+    "participation": "load_participation",
 }
 
 #: Assets that accept a `seasons=` argument.
 SEASONAL_ASSETS: Final = frozenset({
     "player_stats", "team_stats", "rosters", "depth_charts", "injuries",
     "draft_picks", "combine", "snap_counts", "ff_opportunity",
+    "pbp", "participation",
 })
 
 
