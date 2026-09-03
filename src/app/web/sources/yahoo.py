@@ -36,6 +36,11 @@ from src.app.web.sources.base import DraftEvent, SourceStatus, _QueueSource
 
 BASE_URL = "https://fantasysports.yahooapis.com/fantasy/v2"
 MAX_BACKOFF_SECONDS = 30.0
+#: Yahoo caps a `players` collection at 25 per request.
+PLAYER_PAGE = 25
+#: 40 pages = 1,000 players, comfortably past any draftable pool. A bound so a
+#: malformed response cannot loop forever during draft setup.
+MAX_PLAYER_PAGES = 40
 
 
 @dataclass
@@ -48,6 +53,11 @@ class YahooSource(_QueueSource):
 
     _client: Any = field(default=None, repr=False)
     _seen: set[int] = field(default_factory=set, repr=False)
+    #: Yahoo `player_key` -> full name. Draft results identify players ONLY by
+    #: key ("461.p.34009"), and the service resolves NAMES against the board,
+    #: so without this every pick arrives unresolved and the operator types
+    #: all 180 by hand — a cockpit that is strictly worse than manual entry.
+    _names: dict[str, str] = field(default_factory=dict, repr=False)
     _backoff: float = 0.0
     _next_poll: float = 0.0
 
@@ -81,9 +91,27 @@ class YahooSource(_QueueSource):
         try:
             token = json.loads(Path(self.token_path).read_text())
             self._client = OAuth2Client(token=token)
-            self._status = SourceStatus()
         except Exception as exc:                       # noqa: BLE001
             self._status = SourceStatus.failed(f"token load failed: {exc}")
+            return
+
+        # Pull the player catalogue ONCE, here, not on the poll path: it is
+        # several hundred rows over multiple requests and the poll runs every
+        # three seconds against a live clock.
+        try:
+            self._names = self._fetch_player_names()
+        except Exception as exc:                       # noqa: BLE001
+            # Degraded, not failed. Picks still arrive; they arrive as keys and
+            # need typing. Worse than working, better than no source at all.
+            self._status = SourceStatus.degraded(
+                f"player catalogue unavailable ({type(exc).__name__}: {exc}); "
+                f"picks will report Yahoo keys and need manual resolution")
+            return
+        if not self._names:
+            self._status = SourceStatus.degraded(
+                "player catalogue came back empty; picks will report Yahoo keys")
+            return
+        self._status = SourceStatus()
 
     def stop(self) -> None:
         client, self._client = self._client, None
@@ -112,6 +140,21 @@ class YahooSource(_QueueSource):
                 return f"yahoo.manager_map[{key!r}] = {seat} is not a valid seat"
         return None
 
+    def forget(self) -> None:
+        """Re-report every pick on the next poll.
+
+        `_seen` is keyed on Yahoo's pick number, so once a pick is emitted it
+        never comes back. Undo an incorrectly-attributed pick and the feed
+        would simply never mention it again — leaving the board short one
+        player for the rest of the night, with the recommender happily
+        offering someone who is gone.
+
+        Re-emitting everything is cheap: picks already applied come straight
+        back as duplicates, which `apply_event` refuses and the poll loop
+        drops.
+        """
+        self._seen.clear()
+
     # --------------------------------------------------------------- poll
     def poll(self) -> list[DraftEvent]:
         """Never raises. Network trouble becomes `degraded` plus backoff."""
@@ -136,6 +179,32 @@ class YahooSource(_QueueSource):
         self._status = SourceStatus()
         return self._to_events(payload)
 
+    def _fetch_player_names(self) -> dict[str, str]:
+        """`player_key` -> "First Last", paged 25 at a time.
+
+        Yahoo caps `players` collections at 25 per request and signals the end
+        by returning fewer than the page size, so this walks until short.
+        Capped at `MAX_PLAYER_PAGES` so a malformed response cannot spin.
+        """
+        names: dict[str, str] = {}
+        for page in range(MAX_PLAYER_PAGES):
+            url = (f"{BASE_URL}/league/{self.league_key}/players"
+                   f";start={page * PLAYER_PAGE};count={PLAYER_PAGE}"
+                   f"?format=json")
+            response = self._client.get(url, timeout=15.0)
+            response.raise_for_status()
+            found = 0
+            for player in _iter_players(response.json()):
+                key = str(player.get("player_key", ""))
+                name = player.get("name")
+                full = name.get("full") if isinstance(name, Mapping) else None
+                if key and full:
+                    names[key] = str(full)
+                found += 1
+            if found < PLAYER_PAGE:
+                break
+        return names
+
     def _fetch_draft_results(self) -> Any:
         url = f"{BASE_URL}/league/{self.league_key}/draftresults?format=json"
         response = self._client.get(url, timeout=10.0)
@@ -152,8 +221,12 @@ class YahooSource(_QueueSource):
             self._seen.add(int(number))
             team_key = str(pick.get("team_key", ""))
             seat = self.manager_map.get(team_key)
+            key = str(pick.get("player_key", ""))
+            # The NAME when we have it — the resolver matches names, not keys.
+            # Falling back to the key keeps the pick visible and unresolved
+            # rather than dropping it silently.
             out.append(DraftEvent(
-                raw_name=str(pick.get("player_key", "")),
+                raw_name=self._names.get(key, key),
                 seat=int(seat) if seat is not None else None,
                 player_id=None,        # resolved by the service, like every source
                 source=self.name,
@@ -161,6 +234,34 @@ class YahooSource(_QueueSource):
                 external_pick_number=int(number),
             ))
         return sorted(out, key=lambda e: e.external_pick_number or 0)
+
+
+def _iter_players(payload: Any):
+    """Yield each `player` node. Same defensive walk as the draft results —
+    Yahoo nests under numerically-keyed objects that differ between endpoints.
+    """
+    if not isinstance(payload, Mapping):
+        return
+    stack: list[Any] = [payload]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, Mapping):
+            if "player" in node:
+                inner = node["player"]
+                merged: dict[str, Any] = {}
+                # A `player` is sometimes a list of fragment dicts.
+                for part in (inner if isinstance(inner, list) else [inner]):
+                    if isinstance(part, Mapping):
+                        merged.update(part)
+                    elif isinstance(part, list):
+                        for sub in part:
+                            if isinstance(sub, Mapping):
+                                merged.update(sub)
+                if merged:
+                    yield merged
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
 
 
 def _iter_draft_results(payload: Any):
