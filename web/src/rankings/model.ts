@@ -58,9 +58,34 @@ const clone = (board: Board): Board => ({
   ) as Record<ScopeName, Scope>,
 });
 
-const withScope = (board: Board, scope: ScopeName, tiers: Tier[]): Board => {
+/** A label this module generated, as opposed to one the user typed. */
+const AUTO_LABEL = /^Tier \d+$/;
+
+/**
+ * Restore `Tier 1..n` after the tier list changes shape.
+ *
+ * Deleting the third of five tiers leaves "Tier 1, Tier 2, Tier 4, Tier 5",
+ * which reads as data loss even though nothing was lost.
+ *
+ * **Only auto-generated labels are touched.** A tier you renamed to "Elite" or
+ * "Bench fodder" keeps that name wherever it moves — renumbering is a cleanup
+ * of this module's own placeholder text, not a licence to overwrite something
+ * you wrote. `id` is identity and never changes; only the display label does.
+ */
+function renumber(tiers: Tier[]): Tier[] {
+  return tiers.map((tier, i) =>
+    AUTO_LABEL.test(tier.label) ? { ...tier, label: `Tier ${i + 1}` } : tier,
+  );
+}
+
+const withScope = (
+  board: Board,
+  scope: ScopeName,
+  tiers: Tier[],
+  { resequence = true }: { resequence?: boolean } = {},
+): Board => {
   const next = clone(board);
-  next.scopes[scope] = { tiers };
+  next.scopes[scope] = { tiers: resequence ? renumber(tiers) : tiers };
   return next;
 };
 
@@ -123,7 +148,9 @@ export function addTier(
   const index = Math.max(0, Math.min(atIndex, tiers.length));
   tiers.splice(index, 0, {
     id: nextTierId(board, scope),
-    label: `Tier ${tiers.length + 1}`,
+    // Auto-shaped so `renumber` in `withScope` gives it the number its
+    // POSITION earns, not one derived from how many tiers happen to exist.
+    label: `Tier ${index + 1}`,
     color,
     player_ids: [],
   });
@@ -136,12 +163,16 @@ export function renameTier(
   tierId: string,
   label: string,
 ): Board {
+  // `resequence: false` — otherwise typing "Tier 7" into the third slot would
+  // be rewritten to "Tier 3" the instant you pressed Enter, which looks like
+  // the field rejecting your input.
   return withScope(
     board,
     scope,
     board.scopes[scope].tiers.map((tier) =>
       tier.id === tierId ? { ...tier, label } : { ...tier },
     ),
+    { resequence: false },
   );
 }
 
@@ -185,6 +216,7 @@ export function deleteTier(
   const [removed] = tiers.splice(index, 1);
   const receiver = tiers[index] ?? tiers[index - 1];
   receiver.player_ids = [...receiver.player_ids, ...removed.player_ids];
+  // withScope renumbers, so the survivors close the gap the delete opened.
   return withScope(board, scope, tiers);
 }
 

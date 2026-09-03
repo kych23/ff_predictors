@@ -20,6 +20,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragEndEvent,
+  DragOverlay,
+  DragStartEvent,
   KeyboardSensor,
   PointerSensor,
   closestCenter,
@@ -30,9 +32,11 @@ import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { RevConflictError, api, saveBoard } from "../api";
 import { navigate } from "../route";
 import { RankTierList } from "./RankTierList";
+import { PlayerRowOverlay } from "./PlayerRow";
 import { PlayerDetail } from "./PlayerDetail";
 import { ScopeTabs } from "./ScopeTabs";
 import { SeedDialog } from "./SeedDialog";
+import { useSplitPane } from "./useSplitPane";
 import { TIER_COLORS } from "./palette";
 import type { Board, ScopeName } from "./model";
 import {
@@ -40,6 +44,7 @@ import {
   deleteTier,
   flatten,
   movePlayer,
+  ranks,
   recolorTier,
   renameTier,
 } from "./model";
@@ -60,6 +65,14 @@ export function RankingsView({ boardId }: { boardId: string | null }) {
   const [error, setError] = useState<string | null>(null);
   const [seeding, setSeeding] = useState(false);
   const [newName, setNewName] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const split = useSplitPane();
+  const [confirming, setConfirming] = useState<string | null>(null);
+  // The row currently under the cursor. A sortable item stays inside the tier
+  // it started in, so dragging it toward another tier takes it outside the
+  // scroll container's box and `overflow-y-auto` clips it away. The overlay
+  // renders the moving copy at the root instead, where nothing can clip it.
+  const [dragging, setDragging] = useState<string | null>(null);
 
   const pending = useRef<Board | null>(null);
   const inFlight = useRef(false);
@@ -74,6 +87,13 @@ export function RankingsView({ boardId }: { boardId: string | null }) {
   const staleIds = useMemo(
     () => new Set(board?.stale_player_ids ?? []),
     [board],
+  );
+
+  /** Rank within the active scope, so the drag overlay shows the same number
+   * the row it replaces was showing. */
+  const rankOf = useMemo(
+    () => (board ? ranks(board, scope) : new Map<string, number>()),
+    [board, scope],
   );
 
   useEffect(() => {
@@ -183,8 +203,14 @@ export function RankingsView({ boardId }: { boardId: string | null }) {
     }),
   );
 
+  const onDragStart = useCallback(
+    (event: DragStartEvent) => setDragging(String(event.active.id)),
+    [],
+  );
+
   const onDragEnd = useCallback(
     (event: DragEndEvent) => {
+      setDragging(null);
       const { active, over } = event;
       if (!board || !over || active.id === over.id) return;
 
@@ -225,6 +251,16 @@ export function RankingsView({ boardId }: { boardId: string | null }) {
     [newName],
   );
 
+  const removeBoard = useCallback(async (id: string) => {
+    try {
+      await api.deleteBoard(id);
+      setBoards((current) => current.filter((b) => b.board_id !== id));
+      setConfirming(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
   const runSeed = useCallback(
     async (method: string, tierSize: number | null) => {
       if (!board) return;
@@ -252,11 +288,11 @@ export function RankingsView({ boardId }: { boardId: string | null }) {
         {boards.length > 0 && (
           <ul className="mt-6 divide-y divide-line rounded border border-line">
             {boards.map((b) => (
-              <li key={b.board_id}>
+              <li key={b.board_id} className="flex items-center">
                 <button
                   type="button"
                   onClick={() => navigate(`#/board/${b.board_id}`)}
-                  className="flex w-full cursor-pointer items-center
+                  className="flex flex-1 cursor-pointer items-center
                              justify-between px-4 py-3 text-left
                              transition-colors hover:bg-white/5"
                 >
@@ -265,6 +301,41 @@ export function RankingsView({ boardId }: { boardId: string | null }) {
                     {b.counts.overall} ranked · rev {b.rev}
                   </span>
                 </button>
+                {/* Two steps, not one. A board is hand-built research with no
+                    undo and no backup — `data/` is gitignored — so a stray
+                    click must not be able to destroy an evening's work. */}
+                {confirming === b.board_id ? (
+                  <span className="flex shrink-0 items-center gap-2 px-3">
+                    <button
+                      type="button"
+                      onClick={() => void removeBoard(b.board_id)}
+                      className="cursor-pointer rounded bg-warn/20 px-2 py-1
+                                 text-xs text-warn transition-colors
+                                 hover:bg-warn/30"
+                    >
+                      Delete permanently
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirming(null)}
+                      className="cursor-pointer text-xs text-muted
+                                 transition-colors hover:text-ink"
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    aria-label={`Delete ${b.name}`}
+                    title="Delete this board"
+                    onClick={() => setConfirming(b.board_id)}
+                    className="shrink-0 cursor-pointer px-4 py-3 text-xs
+                               text-muted transition-colors hover:text-warn"
+                  >
+                    Delete
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -342,7 +413,39 @@ export function RankingsView({ boardId }: { boardId: string | null }) {
       <div className="flex flex-1 flex-col overflow-hidden">
         <div className="flex flex-wrap items-center gap-3 border-b
                         border-line px-4 py-3">
-          <h1 className="font-sans text-lg text-ink">{board.name}</h1>
+          {renaming ? (
+            <input
+              autoFocus
+              defaultValue={board.name}
+              onBlur={(e) => {
+                const next = e.target.value.trim();
+                // `board_id` is minted from the name at CREATE time and is the
+                // filename — renaming deliberately does not move the file, so
+                // the URL you have bookmarked keeps working.
+                if (next && next !== board.name) {
+                  queueSave({ ...board, name: next });
+                }
+                setRenaming(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                if (e.key === "Escape") setRenaming(false);
+              }}
+              maxLength={80}
+              className="rounded border border-primary bg-bg px-2 py-0.5
+                         font-sans text-lg text-ink outline-none"
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setRenaming(true)}
+              title="Rename this board"
+              className="cursor-pointer rounded font-sans text-lg text-ink
+                         transition-colors hover:text-primary"
+            >
+              {board.name}
+            </button>
+          )}
           <span className="font-mono text-xs text-muted">
             {flatten(board, scope).length} in {scope}
           </span>
@@ -404,7 +507,9 @@ export function RankingsView({ boardId }: { boardId: string | null }) {
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
+              onDragStart={onDragStart}
               onDragEnd={onDragEnd}
+              onDragCancel={() => setDragging(null)}
             >
               {tiers.map((tier, i) => (
                 <RankTierList
@@ -435,12 +540,34 @@ export function RankingsView({ boardId }: { boardId: string | null }) {
                   }}
                 />
               ))}
+              <DragOverlay dropAnimation={null}>
+                {dragging ? (
+                  <PlayerRowOverlay
+                    rank={rankOf.get(dragging) ?? 0}
+                    player={byId.get(dragging)}
+                  />
+                ) : null}
+              </DragOverlay>
             </DndContext>
           )}
         </div>
       </div>
 
-      <div className="w-80 shrink-0 border-l border-line">
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the player panel"
+        tabIndex={0}
+        onPointerDown={split.onPointerDown}
+        onKeyDown={split.onKeyDown}
+        className="w-1.5 shrink-0 cursor-col-resize bg-line transition-colors
+                   hover:bg-primary/60 focus:bg-primary focus:outline-none"
+      />
+
+      <div
+        style={{ width: split.width }}
+        className="shrink-0 overflow-hidden"
+      >
         <PlayerDetail playerId={selected} />
       </div>
 

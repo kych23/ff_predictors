@@ -21,41 +21,57 @@
  */
 import { TierColor } from "./model";
 
-/** Header bar for a tier. */
+/**
+ * SOLID shades, not opacity steps.
+ *
+ * The first version faded one colour by opacity — `bg-indigo-500/80` down to
+ * `bg-indigo-900/20`. Two things broke. Over a `#0D1117` page the bottom of
+ * that ramp is nearly black, so tiers 5-8 were indistinguishable from each
+ * other and from the background. And the colour-picker swatch for a tier sat
+ * ON that tier's own header in the same colour, so the control rendered as an
+ * empty outline — you could not see what you were about to pick, or that there
+ * was a button there at all.
+ *
+ * Solid shades give eight steps that are actually different, and colour drains
+ * toward neutral as the tiers deepen, which is the right signal: tier 1 is a
+ * claim, tier 8 is a shrug. Zinc rather than slate for the last two, because
+ * `positions.ts` owns slate for K and DST.
+ */
 export const TIER_HEADER: Record<string, string> = {
-  t1: "bg-indigo-500/80 border-indigo-300/60 text-white",
-  t2: "bg-indigo-500/65 border-indigo-300/50 text-white",
-  t3: "bg-indigo-500/50 border-indigo-400/45 text-indigo-50",
-  t4: "bg-indigo-600/40 border-indigo-400/40 text-indigo-50",
-  t5: "bg-indigo-600/30 border-indigo-400/35 text-indigo-100",
-  t6: "bg-indigo-700/25 border-indigo-500/30 text-indigo-100",
-  t7: "bg-indigo-800/20 border-indigo-600/25 text-indigo-200",
-  t8: "bg-indigo-900/20 border-indigo-700/25 text-indigo-200",
+  t1: "bg-indigo-400 border-indigo-300 text-indigo-950",
+  t2: "bg-indigo-500 border-indigo-400 text-white",
+  t3: "bg-indigo-600 border-indigo-500 text-white",
+  t4: "bg-indigo-700 border-indigo-600 text-indigo-50",
+  t5: "bg-indigo-800 border-indigo-700 text-indigo-100",
+  t6: "bg-indigo-900 border-indigo-800 text-indigo-100",
+  t7: "bg-zinc-700 border-zinc-600 text-zinc-100",
+  t8: "bg-zinc-800 border-zinc-700 text-zinc-300",
 };
 
 /** The body a tier's rows sit on. Deliberately quieter than the header — the
  * player names are the content, the tier is the frame. */
 export const TIER_BODY: Record<string, string> = {
-  t1: "border-indigo-400/30",
-  t2: "border-indigo-400/25",
-  t3: "border-indigo-400/20",
-  t4: "border-indigo-500/20",
-  t5: "border-indigo-500/15",
-  t6: "border-indigo-600/15",
-  t7: "border-indigo-700/15",
-  t8: "border-indigo-800/15",
+  t1: "border-indigo-400/40",
+  t2: "border-indigo-500/40",
+  t3: "border-indigo-600/40",
+  t4: "border-indigo-700/40",
+  t5: "border-indigo-800/40",
+  t6: "border-indigo-900/40",
+  t7: "border-zinc-700/50",
+  t8: "border-zinc-800/50",
 };
 
-/** Swatch for the colour picker. */
+/** Swatch for the colour picker — the same solid fill the header will take, so
+ * the picker shows you the actual outcome. */
 export const TIER_SWATCH: Record<string, string> = {
-  t1: "bg-indigo-500/80",
-  t2: "bg-indigo-500/65",
-  t3: "bg-indigo-500/50",
-  t4: "bg-indigo-600/40",
-  t5: "bg-indigo-600/30",
-  t6: "bg-indigo-700/25",
-  t7: "bg-indigo-800/20",
-  t8: "bg-indigo-900/20",
+  t1: "bg-indigo-400",
+  t2: "bg-indigo-500",
+  t3: "bg-indigo-600",
+  t4: "bg-indigo-700",
+  t5: "bg-indigo-800",
+  t6: "bg-indigo-900",
+  t7: "bg-zinc-700",
+  t8: "bg-zinc-800",
 };
 
 export const TIER_COLORS: TierColor[] = [

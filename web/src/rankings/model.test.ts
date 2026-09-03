@@ -146,6 +146,64 @@ describe("deleteTier", () => {
   });
 });
 
+describe("renumbering", () => {
+  it("closes the gap a delete opens", () => {
+    const before = board([
+      ["t-1", ["a"]], ["t-2", ["b"]], ["t-3", ["c"]], ["t-4", ["d"]],
+    ]);
+    // board() labels tiers by id; give them auto-shaped labels first.
+    before.scopes.overall.tiers.forEach((t, i) => {
+      t.label = `Tier ${i + 1}`;
+    });
+    const after = deleteTier(before, O, "t-2");
+    expect(after.scopes.overall.tiers.map((t) => t.label)).toEqual([
+      "Tier 1", "Tier 2", "Tier 3",
+    ]);
+  });
+
+  it("renumbers after a tier is reordered", () => {
+    const before = board([["t-1", ["a"]], ["t-2", ["b"]], ["t-3", ["c"]]]);
+    before.scopes.overall.tiers.forEach((t, i) => {
+      t.label = `Tier ${i + 1}`;
+    });
+    const after = moveTier(before, O, "t-3", 0);
+    expect(after.scopes.overall.tiers.map((t) => t.label)).toEqual([
+      "Tier 1", "Tier 2", "Tier 3",
+    ]);
+    // The MOVED tier keeps its identity, only its display number changed.
+    expect(after.scopes.overall.tiers[0].id).toBe("t-3");
+  });
+
+  it("leaves a name you typed alone", () => {
+    const before = board([["t-1", ["a"]], ["t-2", ["b"]], ["t-3", ["c"]]]);
+    before.scopes.overall.tiers[0].label = "Tier 1";
+    before.scopes.overall.tiers[1].label = "Elite";
+    before.scopes.overall.tiers[2].label = "Tier 3";
+    const after = deleteTier(before, O, "t-1");
+    expect(after.scopes.overall.tiers.map((t) => t.label)).toEqual([
+      "Elite", "Tier 2",
+    ]);
+  });
+
+  it("does not rewrite a rename that happens to look auto-generated", () => {
+    const before = board([["t-1", ["a"]], ["t-2", ["b"]], ["t-3", ["c"]]]);
+    const after = renameTier(before, O, "t-2", "Tier 7");
+    expect(after.scopes.overall.tiers[1].label).toBe("Tier 7");
+  });
+
+  it("gives an inserted tier the number its position earns", () => {
+    const before = board([["t-1", ["a"]], ["t-2", ["b"]]]);
+    before.scopes.overall.tiers.forEach((t, i) => {
+      t.label = `Tier ${i + 1}`;
+    });
+    const after = addTier(before, O, 1, "t2");
+    expect(after.scopes.overall.tiers.map((t) => t.label)).toEqual([
+      "Tier 1", "Tier 2", "Tier 3",
+    ]);
+    expect(after.scopes.overall.tiers[1].id).toBe("t-3");
+  });
+});
+
 describe("addTier", () => {
   it("mints max+1 within the scope", () => {
     const before = board([["t-1", []], ["t-7", []]]);

@@ -82,6 +82,10 @@ export interface SessionState {
 }
 
 export interface BoardPlayer {
+  /** Consensus across every platform in the export — what the board column
+   * shows. Distinct from `adp`, which is the single-platform ordering the
+   * recommender models. */
+  adp_consensus?: number | null;
   player_id: string;
   name: string;
   position: string;

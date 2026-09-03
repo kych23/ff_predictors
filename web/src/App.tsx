@@ -11,6 +11,7 @@
 import { DraftCockpit } from "./components/DraftCockpit";
 import { HomeScreen } from "./components/HomeScreen";
 import { RankingsView } from "./rankings/RankingsView";
+import { YahooAttribution } from "./components/YahooAttribution";
 import { navigate, useRoute } from "./route";
 
 function BackBar({ label }: { label: string }) {
@@ -31,23 +32,26 @@ function BackBar({ label }: { label: string }) {
 export default function App() {
   const route = useRoute();
 
-  if (route.view === "draft") {
-    return (
-      <>
-        <BackBar label="Home" />
-        <DraftCockpit />
-      </>
-    );
-  }
-
-  if (route.view === "board") {
-    return (
-      <>
-        <BackBar label="Home" />
-        <RankingsView boardId={route.boardId} />
-      </>
-    );
-  }
-
-  return <HomeScreen />;
+  // The attribution footer is part of the shell, so no view can be added
+  // later that displays Yahoo data without carrying it.
+  return (
+    <div className="flex min-h-screen flex-col">
+      <div className="flex-1">
+        {route.view === "draft" && (
+          <>
+            <BackBar label="Home" />
+            <DraftCockpit />
+          </>
+        )}
+        {route.view === "board" && (
+          <>
+            <BackBar label="Home" />
+            <RankingsView boardId={route.boardId} />
+          </>
+        )}
+        {route.view === "home" && <HomeScreen />}
+      </div>
+      <YahooAttribution />
+    </div>
+  );
 }

@@ -79,13 +79,23 @@ export function RankTierList({
           {tier.player_ids.length}
         </span>
 
+        {/* A bare swatch is invisible here — it sits on a header of its own
+            colour. The white ring and the surface backing are what make it
+            read as a control rather than a smudge. */}
         <button
           type="button"
           aria-label="Change tier colour"
+          title="Change tier colour"
           onClick={() => setPicking((p) => !p)}
-          className={`h-4 w-4 cursor-pointer rounded border border-white/40
-                      ${TIER_SWATCH[tier.color] ?? ""}`}
-        />
+          className="flex h-5 w-5 cursor-pointer items-center justify-center
+                     rounded border border-white/60 bg-black/25
+                     transition-colors hover:bg-black/40"
+        >
+          <span
+            className={`h-2.5 w-2.5 rounded-sm ring-1 ring-white/70
+                        ${TIER_SWATCH[tier.color] ?? ""}`}
+          />
+        </button>
         <button
           type="button"
           aria-label="Delete tier"
@@ -101,20 +111,29 @@ export function RankTierList({
       </header>
 
       {picking && (
-        <div className="flex gap-1.5 border-b border-line/40 px-3 py-2">
-          {TIER_COLORS.map((color) => (
+        <div className="flex items-center gap-2 border-b border-line/40
+                        bg-bg px-3 py-2">
+          {TIER_COLORS.map((color, i) => (
             <button
               key={color}
               type="button"
-              aria-label={`Colour ${color}`}
+              aria-label={`Tier colour ${i + 1}`}
+              title={`Tier colour ${i + 1}`}
               onClick={() => {
                 onRecolor(tier.id, color);
                 setPicking(false);
               }}
-              className={`h-5 w-5 cursor-pointer rounded border
-                          border-white/30 ${TIER_SWATCH[color]}`}
+              className={`h-6 w-6 cursor-pointer rounded transition-transform
+                          hover:scale-110 ${TIER_SWATCH[color]} ${
+                            tier.color === color
+                              ? "ring-2 ring-white"
+                              : "ring-1 ring-white/25"
+                          }`}
             />
           ))}
+          <span className="ml-1 text-xs text-muted">
+            colour is yours to use — the engine never reads it
+          </span>
         </div>
       )}
 
