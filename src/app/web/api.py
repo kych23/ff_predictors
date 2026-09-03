@@ -36,6 +36,7 @@ from src.app.web.service import (
     READY,
     RUNNING,
     CockpitService,
+    DuplicatePick,
     RunInFlight,
     SessionExists,
 )
@@ -276,6 +277,16 @@ async def record_pick(body: PickRequest) -> Any:
                        source="manual")
     try:
         outcome = service.apply_event(event)
+    except DuplicatePick as exc:
+        # 200, not 409. This fires when the operator clicks a row the Yahoo
+        # feed already recorded and the board has not refreshed yet — the pick
+        # IS in, the click was simply redundant. A red banner on a pick clock
+        # for "the thing you wanted already happened" is worse than useless.
+        # The current state rides along so the stale board corrects itself.
+        payload = service.session_payload()
+        service.publish("state", payload)
+        return {"status": "already_recorded", "player_id": exc.player_id,
+                "detail": str(exc), **payload}
     except DataError as exc:
         raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:

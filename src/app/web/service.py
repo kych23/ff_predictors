@@ -179,6 +179,35 @@ def make_source(name: str, *, web_cfg, strategy,
     raise DataError(f"unknown source {name!r}")
 
 
+def _is_operator(event) -> bool:
+    """Did a human enter this, or did a feed report it?
+
+    `POST /api/picks` tags every event `source="manual"`. Anything else came
+    from a poller that cannot disambiguate a name or judge whether a pick
+    really happened.
+    """
+    return (event.source or "manual") == "manual"
+
+
+class DuplicatePick(DataError):
+    """The same pick reported twice.
+
+    A subclass of `DataError` deliberately: the poll loop already drops
+    `DataError` from a source without backing off, and that behaviour is
+    exactly right for a feed echoing a pick the operator typed.
+
+    What it adds is a way for the HTTP layer to tell "this pick is already
+    recorded" apart from "this request is wrong". Both directions of the race
+    are benign — operator first then feed, or feed first then operator
+    clicking a row the UI has not yet dropped — and neither should surface as
+    an error on a pick clock.
+    """
+
+    def __init__(self, message: str, player_id: str) -> None:
+        super().__init__(message)
+        self.player_id = player_id
+
+
 @dataclass
 class CockpitService:
     cfg: Any
@@ -322,9 +351,34 @@ class CockpitService:
             self.ledger.close()
 
     # ------------------------------------------------------------ resolving
+    def _dup(self, player_id: str, who: str) -> DuplicatePick:
+        return DuplicatePick(
+            f"{who} is already drafted; ignoring duplicate", player_id)
+
     def resolve(self, text: str) -> Resolution:
         drafted = set(self.session.state.drafted) if self.session else set()
         return resolve_name(text, self._spine, self.players, exclude=drafted)
+
+    def _names_someone_already_drafted(self, text: str) -> str | None:
+        """The player id this text names, IF he is already off the board.
+
+        `resolve` excludes drafted players on purpose — late in a draft
+        "Jones" should not offer three men who are gone. But that exclusion
+        turns a duplicate report into an UNRESOLVED one, and an unresolved
+        pick still advances the clock. With a live feed echoing picks the
+        operator has already typed, every echo would burn a pick slot: the
+        draft runs out of picks at half distance and every seat attribution
+        after the first is wrong.
+
+        So duplicates are identified BEFORE unresolved is recorded, by
+        resolving against the full board with nothing excluded.
+        """
+        if not self.session or not (text or "").strip():
+            return None
+        hit = resolve_name(text, self._spine, self.players, exclude=set())
+        if hit.status == RESOLVED and hit.player_id in self.session.state.drafted:
+            return str(hit.player_id)
+        return None
 
     # -------------------------------------------------------------- writing
     def apply_event(self, event: DraftEvent) -> str:
@@ -345,14 +399,47 @@ class CockpitService:
             if resolution.status == RESOLVED:
                 player_id = resolution.player_id
             elif resolution.status == AMBIGUOUS:
+                # A FEED cannot choose between candidates, and the poll loop
+                # discards this return value — so an ambiguous name from Yahoo
+                # was recorded nowhere while its pick number went into the
+                # source's `_seen`. The pick vanished, permanently, with no
+                # symptom. Refuse it loudly so the supervisor logs it and the
+                # operator (who can tell two Robinsons apart) enters it.
+                if not _is_operator(event):
+                    raise DataError(
+                        f"{event.raw_name!r} from {event.source or 'feed'} is "
+                        f"ambiguous; enter this pick by hand")
                 return AMBIGUOUS
         if player_id is None:
+            # A feed echoing a pick already entered by hand. Refuse it as the
+            # duplicate it is; the poll loop drops DataError without stopping.
+            duplicate = self._names_someone_already_drafted(event.raw_name)
+            if duplicate is not None:
+                raise self._dup(duplicate, repr(event.raw_name))
+            # An UNRESOLVED entry consumes a pick slot — `pick_number` is
+            # `len(drafted) + len(unresolved) + 1` — and there is no targeted
+            # way to repair one; only `undo`. So when a feed reports a name
+            # this board cannot match, the operator clicks the right player a
+            # moment later and ONE real pick has consumed TWO slots, silently
+            # desynchronising the draft from that point on.
+            #
+            # The operator is the authoritative writer; the feed is a helper.
+            # A name the feed cannot land is the feed's problem to report, not
+            # a pick to invent.
+            if not _is_operator(event):
+                raise DataError(
+                    f"{event.raw_name!r} from {event.source or 'feed'} matches "
+                    f"nobody on the board; enter this pick by hand")
             session.record_unresolved(event.raw_name)
             self._bump()
             return "unresolved"
 
         if player_id in session.state.drafted:
-            raise DataError(f"{player_id} has already been drafted")
+            # The SAME pick reported twice — either the feed echoing what was
+            # typed, or the operator clicking a row the feed already recorded
+            # and the UI has not dropped yet. The desired state already holds,
+            # so this is not a failure in either direction.
+            raise self._dup(player_id, player_id)
 
         seat = event.seat
         if seat is not None and seat == session.my_seat or seat is None and session.is_my_turn():
@@ -366,6 +453,15 @@ class CockpitService:
 
     def undo(self) -> None:
         self._require_session().undo()
+        # The source dedupes on what it has already emitted, so an undone
+        # pick would otherwise never be re-reported and the feed would stay
+        # permanently one pick behind the board.
+        source = getattr(self, "source", None)
+        if source is not None:
+            try:
+                source.forget()
+            except Exception:                          # noqa: BLE001
+                logger.warning("source.forget() failed", exc_info=True)
         self._bump()
 
     def _ledger_my_pick(self, player_id: str) -> None:
@@ -544,6 +640,12 @@ class CockpitService:
             "position": str(r.position),
             "team": None if pd.isna(r.team) else str(r.team),
             "adp": schemas._json_float(r.adp),
+            # What the HUMAN reads. `adp` above is the single-platform board
+            # the engine models; this is every platform averaged. Falls back
+            # to `adp` for the players no export matched.
+            "adp_consensus": schemas._json_float(
+                getattr(r, "adp_consensus", None)) or
+                schemas._json_float(r.adp),
             "bye_week": schemas._json_float(getattr(r, "bye_week", None)),
         } for r in live.itertuples(index=False)]}
 

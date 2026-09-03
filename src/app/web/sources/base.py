@@ -78,6 +78,14 @@ class DraftEventSource(Protocol):
 
     def start(self) -> None: ...
     def stop(self) -> None: ...
+    def forget(self) -> None:
+        """Drop the record of what has already been emitted.
+
+        Called after an undo. A polling source dedupes by pick number, so
+        without this an undone pick is never re-reported and the feed is
+        permanently one pick behind the truth.
+        """
+
     def poll(self) -> list[DraftEvent]:
         """Events not previously returned. Must never raise."""
 
@@ -103,6 +111,10 @@ class _QueueSource:
 
     def stop(self) -> None:
         self._pending.clear()
+
+    def forget(self) -> None:
+        """No-op: a queue source hands over its buffer and keeps no cursor, so
+        there is nothing an undo could make it re-report."""
 
     def poll(self) -> list[DraftEvent]:
         out, self._pending = self._pending, []

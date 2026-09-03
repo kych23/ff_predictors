@@ -11,6 +11,7 @@ import { RosterRail } from "./RosterRail";
 import { SessionSetup } from "./SessionSetup";
 import { NotesPanel } from "./NotesPanel";
 import { WhyPanel } from "./WhyPanel";
+import { useBoardOrdering } from "../rankings/useBoardOrdering";
 import type { BoardPlayer, Candidate, League, Recommendation, SessionState } from "../types";
 
 type Status = "idle" | "running" | "ready" | "error";
@@ -26,6 +27,8 @@ export function DraftCockpit() {
   const [error, setError] = useState<string | null>(null);
   const [entry, setEntry] = useState("");
   const startedAt = useRef(0);
+  // Display only — the recommender never sees this. See useBoardOrdering.
+  const ordering = useBoardOrdering();
 
   const refresh = useCallback(async () => {
     // A 404 from /api/session is the NORMAL pre-draft state, not an error —
@@ -127,6 +130,13 @@ export function DraftCockpit() {
           setError(`no match for "${body.raw_name}" — confirm to record it anyway`);
           setChoices([]);
           return;
+        }
+        // The Yahoo feed got there first and the board had not refreshed yet.
+        // The pick is in; the click was redundant. Fall through so the state
+        // that rode along replaces the stale board — but say so quietly
+        // instead of raising an error for something that already worked.
+        if (res.status === "already_recorded") {
+          setEntry("");
         }
         // The recommendation was computed against a board that no longer
         // exists, so it stops being an answer the moment a pick lands. The
@@ -294,10 +304,48 @@ export function DraftCockpit() {
 
           {error && <p className="mt-3 text-sm text-warn">{error}</p>}
 
+          <div className="mt-8 flex max-w-2xl flex-wrap items-center gap-2">
+            <span className="text-xs uppercase tracking-wider text-muted">
+              Order by
+            </span>
+            <button
+              type="button"
+              onClick={() => ordering.select(null)}
+              className={`focusable cursor-pointer rounded border px-2 py-0.5
+                          text-[11px] transition-colors duration-200 ${
+                            ordering.ranking === null
+                              ? "border-primary text-fg"
+                              : "border-line text-muted hover:text-fg"
+                          }`}
+            >
+              ADP
+            </button>
+            {ordering.boards.map((b) => (
+              <button
+                key={b.board_id}
+                type="button"
+                onClick={() => ordering.select(b.board_id)}
+                className={`focusable cursor-pointer rounded border px-2 py-0.5
+                            text-[11px] transition-colors duration-200 ${
+                              ordering.boardId === b.board_id &&
+                              ordering.ranking
+                                ? "border-primary text-fg"
+                                : "border-line text-muted hover:text-fg"
+                            }`}
+              >
+                {b.name}
+              </button>
+            ))}
+            {ordering.error && (
+              <span className="text-[11px] text-warn">{ordering.error}</span>
+            )}
+          </div>
+
           <BoardPanel
             players={board}
             query={entry}
             onPick={(player_id) => void submit({ player_id })}
+            ranking={ordering.ranking}
           />
 
 

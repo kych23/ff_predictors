@@ -69,12 +69,25 @@ async def test_a_pick_is_recorded_and_advances_the_clock(client):
     assert body["drafted_count"] == 1
 
 
-async def test_a_duplicate_pick_is_409_not_400(client):
+async def test_a_duplicate_pick_is_reported_as_already_recorded(client):
     """Both `Board.take` (ValueError) and `Session._replay` (DataError) can
-    see this; the service normalises so the client gets one answer."""
+    see this; the service normalises so the client gets one answer.
+
+    That answer is now a 200, not a 409. The cockpit runs the Yahoo feed and
+    manual entry as ONE mode — either may fill any pick — so the same pick
+    arriving twice is the expected steady state, not a fault. The operator
+    clicking a row the feed already recorded has done nothing wrong and the
+    desired state already holds; a red banner there teaches distrust of a
+    board that is correct. The current state rides along so a stale board
+    corrects itself.
+
+    A genuinely bad request is still an error: unknown player 404s, empty
+    body 400s (below).
+    """
     await client.post("/api/picks", json={"player_id": "rb-00"})
     resp = await client.post("/api/picks", json={"player_id": "rb-00"})
-    assert resp.status_code == 409
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "already_recorded"
 
 
 async def test_an_unknown_player_id_is_404(client):

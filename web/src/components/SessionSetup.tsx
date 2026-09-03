@@ -28,6 +28,19 @@ function whenLabel(iso: string | null): string {
  * what a drafter calls the slot they are in. The conversion happens here, once,
  * and this is the only place in the frontend allowed to do it.
  */
+/** What each source actually DOES, rather than its internal name.
+ *
+ * "yahoo" is not "Yahoo instead of manual" — manual entry is never gated on
+ * the source, so it is "Yahoo as well as manual". Presenting the raw enum
+ * made them look mutually exclusive, which is the opposite of true and the
+ * one thing an operator must not believe on a pick clock.
+ */
+const SOURCE_LABEL: Record<string, string> = {
+  manual: "Manual only — I enter every pick",
+  yahoo: "Yahoo live feed + manual (recommended)",
+  replay: "Replay a saved draft",
+};
+
 export function SessionSetup({
   league,
   onStart,
@@ -154,7 +167,7 @@ export function SessionSetup({
 
         <div className="space-y-2">
           <label htmlFor="source" className="block text-xs uppercase tracking-wider text-muted">
-            Pick source
+            How picks arrive
           </label>
           <select
             id="source"
@@ -164,7 +177,7 @@ export function SessionSetup({
           >
             {league.sources.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {SOURCE_LABEL[s] ?? s}
               </option>
             ))}
           </select>
@@ -204,9 +217,17 @@ export function SessionSetup({
           )}
 
           {source === "yahoo" && (
-            <p className="text-xs text-warn">
-              Yahoo has no credentials configured — it will report failed and
-              you will type picks yourself. That still works.
+            <p className="text-xs text-muted">
+              The feed fills picks on its own, and you can always click a
+              player off the board to fill one yourself — whichever gets there
+              first wins and the other is ignored. If Yahoo stops responding
+              the cockpit says so and you carry on clicking; nothing is lost.
+            </p>
+          )}
+          {source === "manual" && (
+            <p className="text-xs text-muted">
+              Every pick typed or clicked by you. Choose Yahoo instead if you
+              want the feed as a safety net — manual entry works there too.
             </p>
           )}
         </div>
