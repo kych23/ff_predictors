@@ -98,6 +98,11 @@ def load(path: Path, *, blob_root=None) -> Pull:
                                                       errors="coerce")
 
     ranks = out[[f"rank_{c.lower()}" for c in present]]
+    # The mean across the PLATFORMS, which is not the export's own `AVG`:
+    # that column folds in `Expert`, and analyst opinion may not price
+    # availability (see PLATFORMS above). Averaged over whichever platforms
+    # carry the player, with `n_platforms` recording how many that was.
+    out["platform_mean_rank"] = ranks.mean(axis=1)
     out["rank_spread"] = ranks.max(axis=1) - ranks.min(axis=1)
     out["rank_sd"] = ranks.std(axis=1)
     out["n_platforms"] = ranks.notna().sum(axis=1)

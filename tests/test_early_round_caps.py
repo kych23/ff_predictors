@@ -176,4 +176,4 @@ def test_the_config_change_is_reflected_in_the_decision_version(strategy):
     hash in test_web_config.py moved with it. Models stay valid; only the
     decision layer is affected (§10.1)."""
     assert strategy.decision_version.startswith("dec_v2.")
-    assert strategy.strategy_hash == "6f3621663282"
+    assert strategy.strategy_hash == "3f825e77493b"

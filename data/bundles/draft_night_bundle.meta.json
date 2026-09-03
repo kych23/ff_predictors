@@ -1,8 +1,8 @@
 {
-  "snapshot_id": "sn2_458ef5fc6ba61c759fe113ef",
+  "snapshot_id": "sn2_0ab21cc34b3f960e174178ca",
   "model_version": "draft_v2.a4107ecc2a9c",
-  "decision_version": "dec_v2.6f3621663282",
+  "decision_version": "dec_v2.3f825e77493b",
   "value_source": "quantile_model",
-  "built_at": "2026-08-15T17:39:59+00:00",
-  "n_players": 260
+  "built_at": "2026-08-19T04:15:21+00:00",
+  "n_players": 265
 }

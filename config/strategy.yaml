@@ -65,7 +65,7 @@ adp:
   # curve models what WILL. Re-export closer to draft night and repoint this;
   # nothing else reads the filename, and `build_bundle` warns and falls back to
   # FFC if the path is wrong rather than failing loudly.
-  rankings_path: data/ppr_overall_3d_08152026.csv
+  rankings_path: data/ppr_overall_3d_08182026.csv
   format: ppr
   teams: 12
   min_ranking: 100

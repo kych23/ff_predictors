@@ -32,7 +32,7 @@ REQUIRED_COLUMNS: Final = (
 #: from the distribution the quantile model actually fitted. Optional because
 #: older bundles predate them and because K/DST never had a quantile model —
 #: NaN means "no calibrated band", and `sim.bundle_build` falls back per row.
-OPTIONAL_COLUMNS: Final = ("value_p10", "value_p90")
+OPTIONAL_COLUMNS: Final = ("value_p10", "value_p90", "adp_consensus")
 
 #: Declared coverage tiers (§11.4). A row is never silently valueless.
 COVERAGE_TIERS: Final = ("full", "no_prior_season", "unresolved")

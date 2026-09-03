@@ -191,6 +191,78 @@ def test_from_overall_appends_players_absent_from_overall(rankings_data):
     assert set(_flat(scope)) == set(wrs), "a player was dropped"
 
 
+def _board_with_tiers(tiers: list[tuple[str, str, list[str]]]) -> Board:
+    scopes = empty_scopes()
+    scopes["overall"] = Scope(tiers=tuple(
+        Tier(id=tid, label=label, color=TIER_COLORS[i % len(TIER_COLORS)],
+             player_ids=tuple(ids))
+        for i, (tid, label, ids) in enumerate(tiers)))
+    now = utc_now()
+    return Board(board_id="b", name="B", created_at=now, updated_at=now,
+                 rev=1, seeded_from={}, scopes=scopes)
+
+
+def test_from_overall_carries_the_overall_tiers_across(rankings_data):
+    """A position list seeded from overall must SHOW the overall grouping, not
+    a re-chunk of its flattened order."""
+    board_frame = rankings_data.board
+    rbs = [str(p) for p in
+           board_frame.loc[board_frame["position"] == "RB", "player_id"]]
+    wrs = [str(p) for p in
+           board_frame.loc[board_frame["position"] == "WR", "player_id"]]
+
+    board = _board_with_tiers([
+        ("t-1", "Tier 1", [rbs[0], wrs[0], rbs[1]]),
+        ("t-2", "Tier 2", [wrs[1], wrs[2]]),          # no RB here at all
+        ("t-3", "Tier 3", [rbs[2], wrs[3]]),
+    ])
+    scope = seed_scope(rankings_data, "RB", "from_overall", board=board)
+
+    assert [t.label for t in scope.tiers][:2] == ["Tier 1", "Tier 3"], (
+        "an overall tier with no RB must contribute no RB tier, and the "
+        "numbering must not be resequenced — the gap is the information")
+    assert scope.tiers[0].player_ids == (rbs[0], rbs[1])
+    assert scope.tiers[1].player_ids == (rbs[2],)
+
+
+def test_from_overall_keeps_each_tiers_colour(rankings_data):
+    """Same group, same colour in both scopes, or the correspondence is
+    invisible at a glance — which is the whole reason to align them."""
+    frame = rankings_data.board
+    rbs = [str(p) for p in frame.loc[frame["position"] == "RB", "player_id"]]
+    board = _board_with_tiers([
+        ("t-1", "Tier 1", [rbs[0]]),
+        ("t-2", "Tier 2", [rbs[1]]),
+    ])
+    scope = seed_scope(rankings_data, "RB", "from_overall", board=board)
+    overall = {t.label: t.color for t in board.scopes["overall"].tiers}
+    for tier in scope.tiers:
+        if tier.label in overall:
+            assert tier.color == overall[tier.label]
+
+
+def test_from_overall_does_not_chunk_by_a_fixed_size(rankings_data):
+    """One big overall tier stays one tier, whatever `tier_size` says."""
+    frame = rankings_data.board
+    rbs = [str(p) for p in frame.loc[frame["position"] == "RB", "player_id"]]
+    board = _board_with_tiers([("t-1", "Tier 1", rbs)])
+    scope = seed_scope(rankings_data, "RB", "from_overall", board=board,
+                       tier_size=2)
+    assert len(scope.tiers) == 1
+    assert len(scope.tiers[0].player_ids) == len(rbs)
+
+
+def test_players_missing_from_overall_are_labelled_not_dropped(rankings_data):
+    frame = rankings_data.board
+    rbs = [str(p) for p in frame.loc[frame["position"] == "RB", "player_id"]]
+    board = _board_with_tiers([("t-1", "Tier 1", rbs[:2])])
+    scope = seed_scope(rankings_data, "RB", "from_overall", board=board)
+
+    assert scope.tiers[-1].label == "Not in overall"
+    flat = _flat(scope)
+    assert sorted(flat) == sorted(rbs), "a back was dropped"
+
+
 def test_from_overall_on_an_empty_overall_says_seed_overall_first(
         rankings_data):
     board = _board_with_overall([])
@@ -218,14 +290,80 @@ def test_seeding_is_deterministic(rankings_data):
 
 # ------------------------------------------------------------- tier size
 def test_tier_size_defaults_differ_between_overall_and_positions():
-    assert tier_size_for("overall", None) == 12
-    assert tier_size_for("WR", None) == 6
+    """These are MAXIMUMS now, not fixed sizes — tiers are cut where the
+    metric cliffs and the cap only splits a genuinely flat run."""
+    assert tier_size_for("overall", None) == 24
+    assert tier_size_for("WR", None) == 12
     assert tier_size_for("overall", 4) == 4
 
 
-def test_tier_size_chunks_the_output(rankings_data):
+def test_tier_size_caps_the_output(rankings_data):
     scope = seed_scope(rankings_data, "overall", "adp", tier_size=5)
     assert all(len(t.player_ids) <= 5 for t in scope.tiers)
+
+
+# --------------------------------------------------- natural tier breaks
+def test_a_cliff_ends_a_tier():
+    """Three tight values, a chasm, three more: two tiers, not one."""
+    from src.app.rankings.seed import natural_breaks
+
+    values = [10.0, 9.9, 9.8, 2.0, 1.9, 1.8]
+    assert natural_breaks(values, max_size=99) == [0, 3]
+
+
+def test_an_evenly_spaced_run_has_no_cliff_to_find():
+    """No gap stands out, so nothing but the cap may split it — the players
+    really are equally spaced."""
+    from src.app.rankings.seed import natural_breaks
+
+    values = [float(10 - i) for i in range(10)]
+    assert natural_breaks(values, max_size=99) == [0]
+
+
+def test_identical_values_are_one_tier():
+    """All 21 kickers share one projection. There is no cliff in a flat line."""
+    from src.app.rankings.seed import natural_breaks
+
+    assert natural_breaks([5.0] * 12, max_size=99) == [0]
+
+
+def test_the_cap_splits_a_flat_run():
+    from src.app.rankings.seed import natural_breaks
+
+    assert natural_breaks([5.0] * 10, max_size=4) == [0, 4, 8]
+
+
+def test_the_gap_test_is_local_not_global():
+    """The reason this is local: ADP gaps GROW with depth. A global threshold
+    finds no cliff among the elite, where gaps are tenths, and slices only the
+    tail — measured on the live board it produced a 29-player 'Tier 1'.
+
+    Here the early gaps are ~0.1 with one 0.5 cliff, and the late gaps are all
+    ~5. A global rule sees only the late region; a local one finds the cliff.
+    """
+    from src.app.rankings.seed import natural_breaks
+
+    early = [0.0, 0.1, 0.2, 0.3, 0.8, 0.9, 1.0]      # a 0.5 jump at index 4
+    late = [20.0, 25.0, 30.0, 35.0, 40.0, 45.0]      # uniformly 5 apart
+    starts = natural_breaks(early + late, max_size=99)
+    assert 4 in starts, "the small early cliff was missed"
+
+
+def test_a_tier_of_one_is_suppressed():
+    from src.app.rankings.seed import natural_breaks
+
+    # Cliffs after every single element; MIN_TIER stops one-player tiers.
+    values = [100.0, 50.0, 25.0, 12.0, 6.0, 3.0]
+    starts = natural_breaks(values, max_size=99)
+    bounds = [*starts, len(values)]
+    assert all(hi - lo >= 2 for lo, hi in zip(bounds, bounds[1:], strict=False))
+
+
+def test_unpriced_players_get_their_own_tier(rankings_data):
+    """A null ADP is "the market has no opinion", not a rank — it cannot
+    participate in a distance test, so it trails in a labelled tier."""
+    scope = seed_scope(rankings_data, "overall", "adp")
+    assert scope.tiers[-1].label == "Unpriced"
 
 
 def test_tier_size_is_ignored_by_engine_tiers(rankings_data):

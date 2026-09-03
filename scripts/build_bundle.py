@@ -214,7 +214,8 @@ def _apply_platform_ranking(adp: pd.DataFrame, strategy, entries: list
     out = adp.copy()
     out["match_key"] = out["player_name"].map(normalize_name)
     merged = out.merge(
-        ranks[["match_key", column, "rank_spread", "rank_sd"]],
+        ranks[["match_key", column, "rank_spread", "rank_sd",
+               "platform_mean_rank"]],
         on="match_key", how="left")
 
     priced = rankings_csv.to_pick_positions(merged[column], merged["adp"])
@@ -230,6 +231,20 @@ def _apply_platform_ranking(adp: pd.DataFrame, strategy, entries: list
     disagreement = (spread_hi - spread_lo).abs() / 2.0
 
     merged.loc[matched, "adp"] = priced[matched]
+
+    # DISPLAY ONLY, and deliberately a second column rather than a change to
+    # `adp`. The engine models the board this league actually drafts off —
+    # one platform, chosen in `adp.platform` — because that is what the eleven
+    # opponents are looking at. But for a human reading the board, "where does
+    # he really go" is better answered by every platform at once than by the
+    # one whose preseason ranking happens to be editorial and three days cold.
+    # Nothing in the decision path reads this.
+    consensus = rankings_csv.to_pick_positions(
+        merged["platform_mean_rank"], merged["adp"])
+    merged["adp_consensus"] = consensus.where(consensus.notna(), merged["adp"])
+    n_cons = int(consensus.notna().sum())
+    print(f"      consensus ADP (mean of {len(rankings_csv.PLATFORMS)} "
+          f"platforms, Expert excluded) for {n_cons}/{len(merged)} players")
     merged["adp_stdev"] = np.maximum(
         pd.to_numeric(merged["adp_stdev"], errors="coerce"),
         disagreement.fillna(0.0))
@@ -238,7 +253,8 @@ def _apply_platform_ranking(adp: pd.DataFrame, strategy, entries: list
     print(f"      {strategy.adp.platform} board applied to {n}/{len(merged)} "
           f"priced players ({100 * n / max(len(merged), 1):.0f}%); "
           f"the rest keep FFC")
-    return merged.drop(columns=["match_key", column, "rank_spread", "rank_sd"])
+    return merged.drop(columns=["match_key", column, "rank_spread", "rank_sd",
+                                "platform_mean_rank"])
 
 
 def build(season: int, out: Path) -> bundle_mod.Bundle:
@@ -347,6 +363,11 @@ def build(season: int, out: Path) -> bundle_mod.Bundle:
             "coverage": "full" if matched else "no_prior_season",
             "adp": pd.to_numeric(src["adp"], errors="coerce"),
             "adp_stdev": pd.to_numeric(src["adp_stdev"], errors="coerce"),
+            # Display only; falls back to `adp` where no export row matched.
+            "adp_consensus": pd.to_numeric(
+                src["adp_consensus"], errors="coerce")
+            if "adp_consensus" in src.columns
+            else pd.to_numeric(src["adp"], errors="coerce"),
         })
 
     frame = pd.concat(
